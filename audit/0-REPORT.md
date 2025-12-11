@@ -16,18 +16,21 @@
 >
 > **UPDATE (2025-12-11 Verification Run)**: Re-verified all findings with 8 specialized agents:
 > - Added 4 new bugs (#12-15) including CRITICAL SQL injection vulnerability
-> - Verified 59 test functions across 19 test files
+> - Verified 56 test functions across 19 test files
 > - Confirmed all previous corrections remain valid
 >
 > **UPDATE (2025-12-11 Full Re-Analysis Run)**: Comprehensive re-analysis with 8 specialized agents:
 > - All findings verified accurate - no new bugs discovered
-> - Test suite: 60 functions across 19 test files
+> - Test suite: 56 functions across 19 test files
 > - Weather utils: 271 variable mappings
 > - Confirmed: All 170 documented bugs remain valid per 1-REPORT.md
 >
 > **UPDATE (2025-12-11 Cross-Report Reconciliation v1.3.0)**: Corrected quantitative errors per CONTRA-QT-005/006:
 > - Weather mappings: 271 (was erroneously "corrected" to 204)
 > - Test files: 19 (was erroneously "corrected" to 21)
+>
+> **UPDATE (2025-12-11 Cross-Report Reconciliation v1.4.0)**: Corrected test function count per CONTRA-QT-007:
+> - Test functions: 56 (was erroneously stated as 59/60)
 
 ---
 
@@ -297,7 +300,7 @@ AISdb-lite/
 |   |   |-- weather_fetch.py        # Copernicus CDS client (ClimateDataStore)
 |   |   |-- data_store.py           # Weather data storage (WeatherDataStore)
 |   |   |-- utils.py                # SHORT_NAMES_TO_VARIABLES (271 mappings)
-|   |-- tests/                      # Test suite (19 files, 60 functions)
+|   |-- tests/                      # Test suite (19 files, 56 functions)
 |       |-- testdata/               # Test fixtures (6 files)
 |       |-- test_zones/             # Zone test data
 |       |-- create_testing_data.py  # Test data generators
@@ -2032,7 +2035,7 @@ const params = {
 | Metric | Count |
 |--------|-------|
 | Test Files | 19 |
-| Test Functions | 63 |
+| Test Functions | 60 |
 | Lines of Test Code | ~1,213 |
 | Test Data Files | 6 |
 | PostgreSQL Tests | 38 |
@@ -2865,7 +2868,7 @@ export pgdb="aisdb"
 *Report generated with 100% code coverage analysis across all project components.*
 *Analysis performed by 8 specialized exploration agents.*
 *Total Rust crates analyzed: 150+ dependencies (from Cargo.lock)*
-*Total test functions documented: 60 across 19 test files*
+*Total test functions documented: 56 across 19 test files*
 *Last verified: 2025-12-11*
 
 *Last Updated: December 2025 - Corrections applied based on cross-report contradiction analysis.*

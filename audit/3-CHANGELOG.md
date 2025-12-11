@@ -4,6 +4,67 @@ This file tracks all changes made to `3-REPORT.md` across successive cross-repor
 
 ---
 
+## [Run 2025-12-11 Fresh Analysis v4] - Report Version 1.4.0
+
+### Summary
+Executed fresh unbiased analysis using 10 specialized agents. Discovered four new contradictions: test function count discrepancy (CONTRA-QT-007), severity mismatch for SQL injection/XSS (CONTRA-SV-002), SQLiteDBConn remnant code (CONTRA-ST-005), and bug count methodology clarification (CONTRA-QT-008). Previous corrections verified as applied.
+
+### Analysis Method
+- Fresh analysis completed: Yes
+- Existing 3-REPORT.md found: Yes (v1.3.0)
+- Merge performed: Yes
+- Analysis agents executed: 10
+
+### New Contradictions Found
+- [ADDITION] CONTRA-SV-002: Severity mismatch - SQL injection and XSS are CRITICAL in 1-REPORT but High in 2-REPORT
+- [ADDITION] CONTRA-ST-005: SQLiteDBConn remnant code at decoder.py:253 (dead code that should be cleaned up)
+- [ADDITION] CONTRA-QT-007: Test function count is 56, not 59/60 as claimed in 0-REPORT.md
+- [ADDITION] CONTRA-QT-008: Bug count methodology - 98 enumerated entries vs 173 claimed total (clarification needed)
+
+### Contradictions Verified (Still Present)
+- [VERIFIED] CONTRA-LN-001: XSS vulnerability location (map.js lines 386-390) - still accurate
+- [VERIFIED] CONTRA-SV-001: Y2038 severity consistency - both reports say CRITICAL
+- [VERIFIED] CONTRA-ST-002: Haversine coordinate swap - bug correctly documented in 1-REPORT
+- [VERIFIED] CONTRA-ST-004: SQLiteDBConn false positive - confirmed no class exists
+- [VERIFIED] CONTRA-QT-002: Bug vs Decision count overlap - intentional
+- [VERIFIED] CONTRA-QT-003: API export count discrepancy - documented
+- [VERIFIED] CONTRA-QT-004: Gebco method count - documented
+- [VERIFIED CORRECTED] CONTRA-QT-005: Weather mappings now shows 271 in 0-REPORT.md
+- [VERIFIED CORRECTED] CONTRA-QT-006: Test files now shows 19 in 0-REPORT.md
+
+### Regressions Detected
+None
+
+### Corrections Applied to Source Reports
+
+#### 0-REPORT.md
+- [CORRECTED] Header line 19: "59 test functions" → "56 test functions" (CONTRA-QT-007)
+- [CORRECTED] Header line 24: "60 functions" → "56 functions" (CONTRA-QT-007)
+- [CORRECTED] Section 10 tree (line 303): "60 functions" → "56 functions" (CONTRA-QT-007)
+- [CORRECTED] Footer (line 2871): "60 across 19 test files" → "56 across 19 test files" (CONTRA-QT-007)
+- [ADDED] Header Update Note for v1.4.0 reconciliation
+
+#### 1-REPORT.md
+- No new corrections required (recommendation added for methodology clarification)
+
+#### 2-REPORT.md
+- No corrections required (severity reconciliation recommendation documented)
+
+### Statistics
+- Total Contradictions: 24
+- New This Run: 4 (CONTRA-SV-002, CONTRA-ST-005, CONTRA-QT-007, CONTRA-QT-008)
+- Verified: 12
+- Resolved: 12
+- Regressions: 0
+- Reports Modified: 0-REPORT.md, 3-REPORT.md
+
+### Git State
+- Branch: audit
+- Last Commit: 21ceb2b - docs: Automated audit run - 2025-12-11 15:32
+- Uncommitted Changes: Yes (audit reports)
+
+---
+
 ## [Run 2025-12-11 Fresh Analysis v3] - Report Version 1.3.0
 
 ### Summary

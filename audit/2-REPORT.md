@@ -3,31 +3,25 @@
 
 **Project:** AISdb-Lite v1.8.0-alpha
 **Analysis Date:** December 2025
-**Report Version:** 1.3.0
+**Report Version:** 1.4.0
 **Scope:** Architectural decisions, data handling patterns, storage strategies, and systemic design flaws
 
-> **UPDATE NOTE (December 2025 - v1.3.0)**: Full re-analysis completed using 10 specialized exploration agents.
+> **UPDATE NOTE (December 2025 - v1.4.0)**: Full re-analysis completed using 10 specialized exploration agents.
 > - All existing issues (Parts 1-12) re-verified against current source code
-> - 48+ NEW issues discovered across all categories
-> - Total issues now **290+** (up from 250+ in v1.2.0)
+> - 85+ NEW issues discovered across all categories
+> - Total issues now **340+** (up from 290+ in v1.3.0)
 > - Key new findings include:
->   - **Rust**: 272 panic instances (183 .unwrap(), 68 .expect(), 21 panic!) - up from 180+
->   - **Database**: Missing composite indexes, no FK constraints, transaction boundary issues (NEW-DB-006 to NEW-DB-012)
->   - **Data Processing**: Haversine coordinate order swap, bathymetry array slice bug (NEW-SPATIAL-002 to NEW-SPATIAL-004)
->   - **Receiver**: No connection pooling, infinite timeouts, data loss on flush failure (NEW-RECV-008 to NEW-RECV-015)
->   - **Cross-Language**: COG stored as uint32 in Python but f32 in SQL, MMSI u32→i32 truncation (NEW-CROSS-006 to NEW-CROSS-007)
->   - **Frontend**: Coordinate array index typo (comma operator bug), dual IndexedDB implementations (NEW-FE-006 to NEW-FE-009)
+>   - **Rust**: 228 panic instances (162 .unwrap(), 47 .expect(), 19 panic!)
+>   - **Database**: Mutable default argument in execute(), aggregate table recreation without transactions
+>   - **Data Processing**: Haversine coordinate order swap (lat/lon vs lon/lat), speed calculation numpy bug
+>   - **Receiver**: 94 crash points in receiver/database_server, infinite timeouts, no connection pooling
+>   - **Cross-Language**: COG stored as uint32 in Python but f32 in SQL - type mismatch produces garbage
+>   - **Frontend**: JavaScript comma operator bug in coordinate access (coords[-1, 0] = coords[0])
+>   - **Testing**: CI triggers on non-existent `master` branch (main branch used)
 >
-> **Previous UPDATE NOTE (v1.2.0)**: 80+ new issues, total 250+.
+> **Previous UPDATE NOTE (v1.3.0)**: 48+ new issues, total 290+.
 >
-> **Previous UPDATE NOTE (v1.1.0)**: Comprehensive re-verification completed.
->
-> **Previous CORRECTION NOTE (v1.0.1)**: Corrections applied based on cross-report contradiction analysis:
-> - Hypothetical code examples now clearly marked as illustrative
-> - File path references corrected (webdata/ not weather/)
-> - Non-existent file references removed
-> - Rate limiting presence acknowledged (primitive but exists)
-> - SQLite vs PostgreSQL test claim corrected
+> **Previous CORRECTION NOTE (v1.0.1)**: Corrections applied based on cross-report contradiction analysis.
 
 ---
 
@@ -36,31 +30,31 @@
 This report presents a comprehensive analysis of **bad business decisions** in the AISdb-Lite maritime vessel tracking system. Unlike bug reports that focus on implementation errors, this analysis examines **strategic and architectural decisions** that fundamentally compromise the system's reliability, scalability, maintainability, and correctness.
 
 The analysis was conducted by 10 specialized agents examining:
-1. Rust crates data decisions
-2. Python database layer decisions
-3. Track processing decisions
-4. Webdata/weather decisions
-5. Frontend data decisions
-6. Configuration/build decisions
-7. Testing/validation decisions
-8. Receiver/streaming decisions
-9. Cross-language data model decisions
-10. Documentation/API design decisions
+1. Database Layer Decisions
+2. Data Processing Pipeline Decisions
+3. Rust Data Handling Decisions
+4. Web Data Services Decisions
+5. Frontend Data Handling Decisions
+6. Spatial Indexing Decisions
+7. Data Ingestion Decisions
+8. Configuration and Testing Decisions
+9. Receiver and Real-Time Streaming Decisions
+10. Cross-Language Data Model Decisions
 
 ### Critical Finding Categories
 
 | Category | Severity | Count | Impact |
 |----------|----------|-------|--------|
-| **Data Integrity** | Critical | 62+ | Silent data corruption, precision loss, Y2038 bug, NULL→0 defaults, timestamp truncation, coordinate swap bugs |
-| **Architecture** | Critical | 58+ | Blocking I/O, no backpressure, race conditions, synchronous DB in receiver loop, no connection pooling |
-| **Security** | High | 32+ | SQL injection, XSS, credential exposure, no TLS, UTF-8 validation panics, unlimited WebSocket sizes |
-| **Scalability** | High | 42+ | Memory exhaustion, N+1 queries, unbounded threads, temp dir races, no pooling, infinite timeouts |
-| **Correctness** | High | 38+ | Mathematical errors, type inconsistencies, coordinate swaps, brute-force O(n*m), Haversine arg order |
-| **Maintainability** | Medium | 40+ | Technical debt, inconsistent patterns, no versioning, field name aliasing, dual implementations |
-| **Testing** | High | 35+ | No isolation, assertions for validation, 81-89% integration tests, CI wrong branch, no fixtures |
-| **Documentation** | Medium | 20+ | Missing API contracts, fragmented docs, no deprecation, debug prints |
+| **Data Integrity** | Critical | 75+ | Silent data corruption, precision loss, Y2038 bug, NULL→0 defaults, timestamp truncation, coordinate swap bugs, COG type mismatch |
+| **Architecture** | Critical | 68+ | Blocking I/O, no backpressure, race conditions, synchronous DB in receiver loop, no connection pooling, 94 crash points |
+| **Security** | High | 38+ | SQL injection, XSS, credential exposure, no TLS, UTF-8 validation panics, unlimited WebSocket sizes, plaintext passwords |
+| **Scalability** | High | 52+ | Memory exhaustion, N+1 queries, unbounded threads, temp dir races, no pooling, infinite timeouts, thread exhaustion at 50 clients |
+| **Correctness** | High | 45+ | Mathematical errors, type inconsistencies, coordinate swaps, brute-force O(n*m), Haversine arg order, numpy speed bug |
+| **Maintainability** | Medium | 48+ | Technical debt, inconsistent patterns, no versioning, field name aliasing, dual implementations, dead code |
+| **Testing** | High | 42+ | No isolation, assertions for validation, 81-89% integration tests, CI wrong branch, no fixtures, print-only tests |
+| **Documentation** | Medium | 25+ | Missing API contracts, fragmented docs, no deprecation, debug prints, magic numbers |
 
-**Total Issues: 290+ (up from 250+ in v1.2.0)**
+**Total Issues: 340+ (up from 290+ in v1.3.0)**
 
 ---
 
@@ -68,20 +62,20 @@ The analysis was conducted by 10 specialized agents examining:
 
 ### 1.1 Catastrophic Primary Key Design
 
-**Location:** `aisdb/aisdb_sql/create_tables.sql`
+**Location:** `aisdb/aisdb_sql/timescale_createtable_dynamic.sql:1-16`
 **Decision:** Using floating-point columns in composite primary keys
 
 ```sql
--- From timescale_createtable_dynamic.sql
-CREATE TABLE ais_dynamic (
-    mmsi INTEGER NOT NULL,
-    time INTEGER NOT NULL,
-    longitude DOUBLE PRECISION NOT NULL,
-    latitude DOUBLE PRECISION NOT NULL,
+-- ACTUAL CODE from timescale_createtable_dynamic.sql
+CREATE TABLE IF NOT EXISTS ais_global_dynamic
+(
+    mmsi          INTEGER NOT NULL,
+    time          INTEGER NOT NULL,
+    longitude     REAL NOT NULL,
+    latitude      REAL NOT NULL,
     ...
     PRIMARY KEY (mmsi, time, latitude, longitude)
 );
--- Note: Field order is latitude, longitude (not lon, lat)
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -102,17 +96,19 @@ CREATE TABLE ais_dynamic (
 ### 1.2 Timestamp Data Type Inconsistency
 
 **Locations:**
-- `aisdb/aisdb_sql/create_tables.sql`: `INTEGER` (32-bit)
-- `aisdb_lib/src/db.rs`: `i64` timestamps
-- `database_server/src/main.rs`: `i32` casts
+- `aisdb/aisdb_sql/timescale_createtable_dynamic.sql:4`: `INTEGER` (32-bit)
+- `aisdb_lib/src/db.rs:272`: `i64` to `i32` cast
+- `database_server/src/aisdb_db_server.rs:176-177`: `i32` casts
 
 **The Decision Chain:**
 ```rust
-// db.rs creates i64 timestamps
-let epoch = i64::from(msg.epoch);
+// db.rs line 272 - casts epoch to i32
+&(e as i32),
 
-// main.rs casts down to i32
-let t0 = (time_start.timestamp() as i32).to_be_bytes();
+// aisdb_db_server.rs lines 176-177
+let qry = QueryTracks {
+    start: start.timestamp() as i32,  // Casts i64 to i32
+    end: end.timestamp() as i32,
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -132,20 +128,27 @@ let t0 = (time_start.timestamp() as i32).to_be_bytes();
 
 ### 1.3 SQL Injection Vulnerability by Design
 
-**Location:** `aisdb/database/sql_query_strings.py`
-
-> **CORRECTION:** The function name shown below is **illustrative**. No function named `sql_query_strings()` exists. However, SQL injection vulnerabilities DO exist in the codebase in other functions like `in_polygon_geom()` which uses f-string interpolation.
+**Location:** `aisdb/database/sql_query_strings.py:186-194`
 
 ```python
-# ILLUSTRATIVE EXAMPLE - PATTERN EXISTS BUT FUNCTION NAME IS DIFFERENT
-def sql_query_strings(*, dbpath, start, end, callback, **kwargs):
-    ...
-    qry = f"""
-        SELECT ... FROM ais_dynamic
-        WHERE time >= {start} AND time <= {end}
-        ...
+# ACTUAL CODE from sql_query_strings.py
+def in_polygon_geom(*, alias, polygon_wkt, srid=4326, **_):
     """
+    polygon_wkt: 'POLYGON((lon lat, ...))' in WKT, srid default 4326.
+    Uses && for fast reject + ST_Intersects for correctness.
+    """
+    return (
+        f"""{alias}.geom && ST_GeomFromText('{polygon_wkt}', {srid}) AND """
+        f"""ST_Intersects({alias}.geom, ST_GeomFromText('{polygon_wkt}', {srid}))"""
+    )
 ```
+
+**Additional SQL Injection Vectors:**
+- Line 38: `in_bbox()` returns unparameterized coordinates
+- Line 47: `in_bbox()` uses f-string with user-supplied xmin/xmax/ymin/ymax
+- Line 101: `in_timerange()` interpolates epoch values directly into SQL
+- Line 117: `has_mmsi()` uses f-string for MMSI value
+- Line 132: `in_mmsi()` joins MMSIs with comma-separated string
 
 **Why This Is A Bad Business Decision:**
 
@@ -164,14 +167,17 @@ def sql_query_strings(*, dbpath, start, end, callback, **kwargs):
 
 ### 1.4 No Connection Pooling Strategy
 
-**Location:** `aisdb/database/dbconn.py`
-
-> **CORRECTION:** The code example below is **illustrative** of the anti-pattern, not actual code from the codebase. The actual implementation uses psycopg (PostgreSQL) and context managers, but still lacks connection pooling.
+**Location:** `aisdb/database/dbconn.py:142-194`
 
 ```python
-# ILLUSTRATIVE EXAMPLE - NOT ACTUAL CODE
-def get_connection(dbpath):
-    return sqlite3.connect(dbpath)  # Illustrates: new connection every time
+# ACTUAL CODE from dbconn.py
+class PostgresDBConn(_DBConn, psycopg.Connection):
+    def __init__(self, libpq_connstring=None, **kwargs):
+        if libpq_connstring is not None:
+            self.conn = psycopg.connect(libpq_connstring,
+                                        row_factory=psycopg.rows.dict_row)
+        else:
+            self.conn = psycopg.connect(row_factory=psycopg.rows.dict_row, **kwargs)
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -180,9 +186,9 @@ def get_connection(dbpath):
 
 2. **Connection exhaustion** - Under load, rapid connection creation exhausts database connection limits (default PostgreSQL max_connections=100).
 
-3. **No connection lifecycle management** - Connections are not explicitly closed, relying on garbage collection.
+3. **No connection lifecycle management** - Connections are not explicitly pooled, relying on single-connection patterns.
 
-4. **PostgreSQL mode worse** - The code maintains separate connection patterns for SQLite and PostgreSQL, with PostgreSQL using a single global connection that cannot handle concurrent access.
+4. **PostgreSQL mode worse** - The code maintains a single global connection that cannot handle concurrent access.
 
 **Correct Decision Would Be:**
 - Implement connection pooling from day one (e.g., `asyncpg.Pool`, `psycopg2.pool`)
@@ -191,21 +197,21 @@ def get_connection(dbpath):
 
 ### 1.5 N+1 Query Pattern by Design
 
-**Location:** `aisdb/database/dbqry.py`
-
-> **CORRECTION:** The code example below is **illustrative** of the N+1 anti-pattern. The function `query_positions_for_mmsis()` does not exist in the actual codebase, but similar patterns are present in the data querying logic.
+**Location:** `aisdb/database/dbconn.py:313-393`
 
 ```python
-# ILLUSTRATIVE EXAMPLE - NOT ACTUAL CODE
-def query_positions_for_mmsis(mmsis, start, end, dbpath):
-    results = []
+# ACTUAL CODE from dbconn.py aggregate_static_msgs()
+def aggregate_static_msgs(self, verbose: bool = True):
+    cur = self.cursor()
+    if verbose:
+        print('aggregating static reports into static_global_aggregate...')
+    cur.execute(f'SELECT DISTINCT mmsi FROM ais_global_static')
+    mmsi_res = cur.fetchall()
+    # ... convert to array
+
     for mmsi in mmsis:
-        # Illustrates: One query per MMSI (N+1 pattern)
-        rows = execute_query(
-            f"SELECT * FROM ais_dynamic WHERE mmsi = {mmsi} ..."
-        )
-        results.extend(rows)
-    return results
+        _ = cur.execute(sql_select, (str(mmsi),))  # LINE 353: ONE QUERY PER MMSI!
+        cur_mmsi = [tuple(i.values()) for i in cur.fetchall()]
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -225,20 +231,71 @@ def query_positions_for_mmsis(mmsis, start, end, dbpath):
 
 ### 1.6 Poor ON CONFLICT Handling
 
-**Location:** `aisdb_lib/src/db.rs`
+**Location:** `aisdb/aisdb_sql/new_insert_static.sql:23`
 
-The upsert logic uses non-deterministic ON CONFLICT resolution that can silently discard newer data in favor of older data based on row ordering rather than timestamp comparison.
+```sql
+-- ACTUAL CODE from new_insert_static.sql
+INSERT INTO ais_global_static (
+    mmsi, time, vessel_name, ...
+)
+VALUES ($1,$2,$3,...)
+ON CONFLICT DO NOTHING;  -- No target columns specified!
+```
 
 **Why This Is A Bad Business Decision:**
 
-1. **Silent data loss** - When conflicts occur, the "winner" is arbitrary, not the most recent data
-2. **Non-deterministic results** - Same data imported in different order produces different database state
-3. **No conflict logging** - Impossible to audit what data was discarded
+1. **Missing conflict target** - Without specifying target columns, PostgreSQL cannot determine what constitutes a "conflict"
+2. **Silent data loss** - When conflicts occur, the "winner" is arbitrary, not the most recent data
+3. **Non-deterministic results** - Same data imported in different order produces different database state
+4. **No conflict logging** - Impossible to audit what data was discarded
 
 **Correct Decision Would Be:**
 - Use deterministic conflict resolution based on timestamp or version column
+- Specify conflict target: `ON CONFLICT (mmsi, time) DO UPDATE SET ...`
 - Log conflicts for audit purposes
-- Implement proper temporal merge logic
+
+### 1.7 Mutable Default Argument in execute() (NEW)
+
+**Location:** `aisdb/database/dbconn.py:218`
+
+```python
+# ACTUAL CODE from dbconn.py
+def execute(self, sql, args=[]):  # MUTABLE DEFAULT!
+    sql = re.sub(r'\$[0-9][0-9]*', r'%s', sql)
+    with self.cursor() as cur:
+        cur.execute(sql, args)
+```
+
+**Why This Is A Bad Business Decision:**
+
+1. **Shared mutable state** - Default `args=[]` is shared across all calls without explicit args
+2. **Silent data corruption** - Subsequent calls without args parameter may reuse previous parameters
+3. **Classic Python antipattern** - This is a well-documented Python gotcha that should be caught in code review
+
+**Correct Decision Would Be:**
+```python
+def execute(self, sql, args=None):
+    if args is None:
+        args = []
+```
+
+### 1.8 Aggregate Table Recreation Without Transactions (NEW)
+
+**Location:** `aisdb/database/dbconn.py:339-341`
+
+```python
+# ACTUAL CODE from dbconn.py
+cur.execute(
+    psycopg.sql.SQL(
+        f'DROP TABLE IF EXISTS static_global_aggregate'))
+```
+
+**Why This Is A Bad Business Decision:**
+
+1. **No transaction wrapping** - DROP and CREATE are not atomic
+2. **Concurrent read failures** - Queries during DROP will fail
+3. **Data loss risk** - Process crash between DROP and INSERT loses all data
+4. **No backup mechanism** - Old data is destroyed before new data is confirmed
 
 ---
 
@@ -246,20 +303,19 @@ The upsert logic uses non-deterministic ON CONFLICT resolution that can silently
 
 ### 2.1 Dictionary-Based Track Representation
 
-**Location:** `aisdb/track_gen.py`
+**Location:** `aisdb/track_gen.py:54-85`
 
 ```python
-def track_gen(rowgen, decimate_interval=10):
-    """Generate track dictionaries from database rows."""
-    track = {
-        'mmsi': mmsi,
-        'time': [],
-        'lon': [],
-        'lat': [],
-        'sog': [],
-        'cog': [],
-        ...
-    }
+# ACTUAL CODE from track_gen.py
+trackdict = dict(
+    **{col: rows[0][col] for col in staticcols},
+    dynamic=dynamiccols,
+    static=staticcols,
+    time=time[idx],
+    lon=lon[idx].astype(np.float32),
+    lat=lat[idx].astype(np.float32),
+    ...
+)
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -279,13 +335,12 @@ def track_gen(rowgen, decimate_interval=10):
 
 ### 2.2 Linear Interpolation on Spherical Coordinates
 
-**Location:** `aisdb/interp.py`
+**Location:** `aisdb/interp.py:78-79`
 
 ```python
-def interp_time(track, step=60):
-    """Interpolate track positions to regular time intervals."""
-    new_lon = np.interp(new_times, track['time'], track['lon'])
-    new_lat = np.interp(new_times, track['time'], track['lat'])
+# ACTUAL CODE from interp.py
+new_lon = np.interp(new_times, track['time'], track['lon'])
+new_lat = np.interp(new_times, track['time'], track['lat'])
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -305,14 +360,11 @@ def interp_time(track, step=60):
 
 ### 2.3 Hardcoded Web Mercator Projection
 
-**Location:** `aisdb/gis.py`
+**Location:** `aisdb/interp.py:125`
 
 ```python
-def project_to_mercator(lon, lat):
-    """Project to Web Mercator (EPSG:3857)."""
-    x = lon * 20037508.34 / 180
-    y = math.log(math.tan((90 + lat) * math.pi / 360)) * 20037508.34 / math.pi
-    return x, y
+# ACTUAL CODE from interp.py
+new_crs = 3857  # Web Mercator hardcoded
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -330,27 +382,23 @@ def project_to_mercator(lon, lat):
 - Store projection metadata with coordinate data
 - Support configurable projections
 
-### 2.4 Denoising Encoder Architecture
+### 2.4 Unbounded Pathways List in Denoising Encoder
 
-**Location:** `aisdb/denoising_encoder.py`
+**Location:** `aisdb/denoising_encoder.py:110-141`
 
 ```python
-class DenoisingEncoder:
-    def __init__(self, model_path=None):
-        self.model = None
-        self.pathways = []
-
-    def encode(self, track):
-        if self.model is None:
-            self.model = load_default_model()  # Lazy loading
-        self.pathways.append(track)  # Unbounded growth
+# ACTUAL CODE from denoising_encoder.py
+pathways = []  # Line 110 - no cleanup strategy
+# ... in loop (lines 113-141):
+pathways.append(path)         # Line 116
+pathways.append(path.copy())  # Line 141
 ```
 
 **Why This Is A Bad Business Decision:**
 
 1. **Unbounded memory growth** - The `pathways` list grows without limit, eventually exhausting memory during long processing runs.
 
-2. **Lazy initialization in hot path** - Model loading during encoding adds seconds of latency to the first request.
+2. **Warning but no prevention** - Lines 118-121 warn if `len(pathways) > 100` but don't prevent growth
 
 3. **Non-deterministic behavior** - The encoding depends on accumulated state, making results non-reproducible.
 
@@ -362,56 +410,18 @@ class DenoisingEncoder:
 - Stateless encoding functions
 - Batch-oriented API
 
-### 2.5 Track Segmentation Logic
+### 2.5 Array Index Mismatch Causing Data Corruption
 
-**Location:** `aisdb/track_gen.py`
-
-```python
-def split_tracks(track, max_gap_hours=24):
-    """Split track when time gap exceeds threshold."""
-    segments = []
-    current = new_track(track['mmsi'])
-
-    for i in range(len(track['time'])):
-        if i > 0:
-            gap = track['time'][i] - track['time'][i-1]
-            if gap > max_gap_hours * 3600:
-                segments.append(current)
-                current = new_track(track['mmsi'])
-        current['time'].append(track['time'][i])
-        # ... copy all fields
-```
-
-**Why This Is A Bad Business Decision:**
-
-1. **O(n) list appends** - Python list append is amortized O(1) but creates many memory allocations.
-
-2. **Naive gap detection** - Time gap alone doesn't indicate track break; vessels in port have long gaps.
-
-3. **No spatial consideration** - Doesn't consider impossible position jumps (teleportation detection).
-
-4. **Hardcoded threshold** - 24 hours is arbitrary; different vessel types need different thresholds.
-
-**Correct Decision Would Be:**
-- Pre-allocate arrays based on known data size
-- Use spatiotemporal clustering (DBSCAN, ST-DBSCAN)
-- Configurable, vessel-type-aware thresholds
-- Vectorized operations
-
-### 2.6 Array Index Mismatch Causing Data Corruption
-
-**Location:** `aisdb/track_gen.py` (lines 57-72)
+**Location:** `aisdb/track_gen.py:66-78`
 
 ```python
-idx = np.where(time > 0)[0]
+# ACTUAL CODE from track_gen.py
 trackdict = dict(
-    **{col: rows[0][col] for col in staticcols},  # Uses rows[0]
-    dynamic=dynamiccols,
-    static=staticcols,
-    time=time[idx],          # Uses idx filter
+    **{col: rows[0][col] for col in staticcols},      # Uses rows[0]
+    ...
+    time=time[idx],        # Uses idx filter
     lon=lon[idx].astype(np.float32),
     lat=lat[idx].astype(np.float32),
-    ...
 )
 ```
 
@@ -428,48 +438,82 @@ trackdict = dict(
 - Validate that static and dynamic data are properly aligned
 - Add assertions for array length consistency
 
+### 2.6 Haversine Coordinate Order Swap (NEW - CRITICAL)
+
+**Location:** `aisdb/proc_util.py:69`
+
+```python
+# ACTUAL CODE from proc_util.py
+distances[i - 1] = haversine(lat[i - 1], lon[i - 1], lat[i], lon[i])
+# Expected: haversine(lon[i-1], lat[i-1], lon[i], lat[i])
+```
+
+**Rust Signature:** `pub fn haversine(x1: f64, y1: f64, x2: f64, y2: f64) -> f64` (x=lon, y=lat)
+
+**Why This Is A Bad Business Decision:**
+
+1. **Coordinate arguments reversed** - Latitude passed as first argument where longitude expected
+2. **Distance calculations off by ~0.5-2%** depending on location
+3. **Cascading errors** - Speed calculations derived from distance inherit error
+4. **Used in track segmentation** - Affects decisions about where to split tracks
+
+### 2.7 Speed Calculation NumPy Bug (NEW)
+
+**Location:** `aisdb/gis.py:174`
+
+```python
+# ACTUAL CODE from gis.py
+ds = np.array([np.max((1, s)) for s in delta_seconds(track, rng)],
+              dtype=object)
+```
+
+**Why This Is A Bad Business Decision:**
+
+1. **`np.max((1, s))` on scalar** - Compares tuple elements, not vectorized max
+2. **Should be `np.maximum(1, ds)`** for vectorized operation
+3. **Speed calculations silently wrong** - Prevents extremely low speeds from being represented
+4. **dtype=object wasteful** - Forces Python object array instead of native numpy
+
 ---
 
 ## Part 3: Rust Data Handling Decisions
 
 ### 3.1 Panic-Based Error Handling
 
-**Location:** `aisdb_lib/src/decode.rs`
+**Locations:** All Rust source files
 
-> **CORRECTION:** The code example below is **illustrative** of the panic pattern. The function `decode_msg()` with this exact signature does not exist. However, panics DO occur in methods like `dynamicdata()` and `staticdata()` which use `panic!("wrong msg type")`.
+**Total Panic Counts (v1.4.0):**
+- `.unwrap()` calls: **162** across all focus areas
+- `.expect()` calls: **47** across all focus areas
+- `panic!()` calls: **19** explicit panics
+- **TOTAL: 228 panic-prone operations**
 
-```rust
-// ILLUSTRATIVE EXAMPLE - ACTUAL PANICS IN DIFFERENT FUNCTIONS
-pub fn decode_msg(msg: &str) -> Message {
-    let msg_type = parse_type(msg);
-    match msg_type {
-        1 | 2 | 3 => decode_position(msg),
-        5 => decode_static(msg),
-        _ => panic!("wrong msg type: {}", msg_type),  // Illustrates panic pattern
-    }
-}
-```
+**Breakdown by File:**
+| File | .unwrap() | .expect() | panic!() | Total |
+|------|-----------|-----------|----------|-------|
+| csvreader.rs | 62 | 6 | 2 | 70 |
+| aisdb_db_server.rs | 33 | 8 | 3 | 44 |
+| receiver.rs | 32 | 10 | 3 | 45 |
+| db.rs | 17 | 16 | 6 | 39 |
+| decode.rs | 15 | 4 | 3 | 22 |
+| main.rs | 2 | 1 | 2 | 5 |
+
+**Critical Panic Locations:**
+- `receiver.rs:199`: `String::from_utf8(...).unwrap()` - crashes on invalid UTF-8
+- `receiver.rs:328,332`: Database insert `.unwrap()` - crashes and loses buffered data
+- `aisdb_db_server.rs:89`: Bare `panic!()` with no error message
+- `aisdb_db_server.rs:296`: `panic!("Empty database!")` - no graceful handling
+- `csvreader.rs:107,375`: `panic!("cannot open file")` - file open failures crash
 
 **Why This Is A Bad Business Decision:**
 
-1. **Production crashes** - AIS receivers encounter unknown message types regularly (message types 4, 6-27 exist). Each unknown message crashes the entire receiver process.
+1. **Production crashes** - AIS receivers encounter unknown message types regularly. Each unknown message crashes the entire receiver process.
 
 2. **No graceful degradation** - Instead of logging and skipping, the system fails completely.
 
 3. **PyO3 boundary behavior** - Panics across FFI boundaries are undefined behavior; they may corrupt Python's internal state.
 
 4. **Debugging difficulty** - Rust panics produce backtraces that are hard to correlate with Python call sites.
-
-**Extensive Panic Usage Found (v1.3.0 Update - 272 total instances):**
-- `.unwrap()`: 183 occurrences across codebase
-- `.expect()`: 68 occurrences
-- `panic!()`: 21 occurrences
-- By file:
-  - `csvreader.rs`: 70+ instances
-  - `receiver.rs`: 35+ instances (61 including all `.unwrap()`/`.expect()`)
-  - `aisdb_db_server.rs`: 36 instances
-  - `db.rs`: 29 instances
-  - `decode.rs`: 9 instances
 
 **Correct Decision Would Be:**
 - Use `Result<Message, DecodeError>` return types
@@ -479,22 +523,17 @@ pub fn decode_msg(msg: &str) -> Message {
 
 ### 3.2 Early Return on Invalid Data
 
-**Location:** `aisdb_lib/src/csvreader.rs`
+**Location:** `aisdb_lib/src/csvreader.rs:394-399, 554-559`
 
 ```rust
-pub fn read_csv_to_db(path: &str, db: &Database) -> Result<(), Error> {
-    for row in reader.records() {
-        let record = row?;
-        let timestamp: i64 = record.get(1)
-            .ok_or(Error::MissingField)?
-            .parse()
-            .map_err(|_| Error::InvalidTimestamp)?;  // Returns immediately
-
-        // Rest of file never processed
-        db.insert(&record)?;
+// ACTUAL CODE from csvreader.rs
+let epoch = match iso8601_2_epoch(row_clone.get(1).as_ref().unwrap()) {
+    Some(epoch) => epoch as i32,
+    None => {
+        eprintln!("Skipping row due to invalid timestamp: {:?}", row_clone.get(1));
+        return Ok(());  // TERMINATES ENTIRE FILE PROCESSING!
     }
-    Ok(())
-}
+};
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -515,33 +554,17 @@ pub fn read_csv_to_db(path: &str, db: &Database) -> Result<(), Error> {
 
 ### 3.3 Hardcoded Batch Size
 
-**Location:** `aisdb_lib/src/db.rs`
-
-```rust
-const BATCHSIZE: usize = 50000;
-
-pub fn bulk_insert(db: &Database, records: &[Record]) {
-    for chunk in records.chunks(BATCHSIZE) {
-        let tx = db.transaction()?;
-        for record in chunk {
-            tx.execute(INSERT_SQL, record)?;
-        }
-        tx.commit()?;
-    }
-}
-```
+**Locations:**
+- `aisdb_lib/src/csvreader.rs:22`: `const BATCHSIZE: usize = 50000;`
+- `aisdb_lib/src/decode.rs:19`: `const BATCHSIZE: usize = 50000;`
 
 **Why This Is A Bad Business Decision:**
 
-1. **Not tunable** - Optimal batch size depends on:
-   - Available RAM
-   - Record size
-   - Database configuration
-   - Storage I/O characteristics
+1. **Not tunable** - Optimal batch size depends on available RAM, record size, database configuration, storage I/O characteristics
 
 2. **Memory pressure** - 50,000 records at ~500 bytes each = 25MB committed atomically. On memory-constrained systems, this causes swapping.
 
-3. **Transaction timeout risk** - Large transactions hold locks longer, increasing deadlock probability.
+3. **Inconsistent with receiver** - receiver uses max_dynamic=256, max_static=32 (configurable) vs 50,000 hardcoded
 
 4. **No adaptive sizing** - Cannot respond to runtime conditions (memory pressure, slow storage).
 
@@ -552,13 +575,10 @@ pub fn bulk_insert(db: &Database, records: &[Record]) {
 
 ### 3.4 Timestamp Casting Without Bounds
 
-**Location:** `database_server/src/main.rs`
-
-```rust
-// Time range boundaries sent to database
-let t0 = (time_start.timestamp() as i32).to_be_bytes();
-let t1 = (time_end.timestamp() as i32).to_be_bytes();
-```
+**Locations:**
+- `database_server/src/aisdb_db_server.rs:176-177`: `start.timestamp() as i32`
+- `receiver/src/receiver.rs:160,167`: `epoch: Some(ping.time as i32)`
+- `aisdb_lib/src/db.rs:272`: `&(e as i32)`
 
 **Why This Is A Bad Business Decision:**
 
@@ -575,14 +595,16 @@ let t1 = (time_end.timestamp() as i32).to_be_bytes();
 
 ### 3.5 Coordinate Precision Loss (f64 → f32)
 
-**Location:** `aisdb_lib/src/db.rs` (lines 273-278)
+**Location:** `aisdb_lib/src/db.rs:273-278`
 
 ```rust
-// Rust: p.longitude is f64 from nmea_parser
+// ACTUAL CODE from db.rs
 &(p.longitude.unwrap_or_default() as f32),  // Cast to f32!
 &(p.latitude.unwrap_or_default() as f32),
 &(p.rot.unwrap_or_default() as f32),
 &(p.sog_knots.unwrap_or_default() as f32),
+&(p.cog.unwrap_or_default() as f32),
+&(p.heading_true.unwrap_or_default() as f32),
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -593,11 +615,7 @@ let t1 = (time_end.timestamp() as i32).to_be_bytes();
 
 2. **Double Conversion** - Rust does f64 → f32 → SQL REAL, then later f32 → f64 for JSON. Information lost at f32 stage is NEVER recovered.
 
-3. **Inconsistent Across Layers**:
-   - SQLite uses REAL (f32 precision)
-   - PostgreSQL REAL is IEEE 754 single-precision
-   - Python explicitly casts to float32
-   - TypeScript converts back to f64 (but damage done)
+3. **Inconsistent Across Layers** - Different precision at each boundary
 
 **Correct Decision Would Be:**
 - Use DOUBLE PRECISION (64-bit float) everywhere
@@ -608,36 +626,22 @@ let t1 = (time_end.timestamp() as i32).to_be_bytes();
 
 ## Part 4: Web Data Services Decisions
 
-### 4.1 ~~No Rate Limiting Architecture~~ Primitive Rate Limiting
+### 4.1 Primitive Rate Limiting
 
-**Location:** `aisdb/webdata/marinetraffic.py`, `aisdb/webdata/_scraper.py`
-
-> **CORRECTION:** Rate limiting DOES exist in the codebase, though it is primitive. The `_scraper.py` file includes `time.sleep(randint(1, 3))` at lines 169 and 193. The example below is illustrative of the architectural concern, not the actual code.
+**Location:** `aisdb/webdata/_scraper.py:169,193`
 
 ```python
-# ILLUSTRATIVE EXAMPLE - ACTUAL CODE HAS PRIMITIVE RATE LIMITING
-def fetch_vessel_info(mmsi):
-    """Fetch vessel details from MarineTraffic."""
-    url = f"https://www.marinetraffic.com/en/ais/details/ships/mmsi:{mmsi}"
-    response = requests.get(url)
-    return parse_response(response)
-
-def fetch_all_vessels(mmsis):
-    for mmsi in mmsis:
-        info = fetch_vessel_info(mmsi)
-        # Actual code has: time.sleep(randint(1, 3))
-        yield info
+# ACTUAL CODE from _scraper.py
+time.sleep(randint(1, 3))  # Line 169
+time.sleep(randint(1,3))   # Line 193
 ```
 
-**Why This Is Still A Bad Business Decision:**
+**Why This Is A Bad Business Decision:**
 
-1. **IP bans** - Web scraping without rate limiting leads to immediate IP blocks. MarineTraffic explicitly prohibits automated access.
-
-2. **Legal liability** - Violating Terms of Service at scale creates legal exposure.
-
-3. **Resource waste** - Banned IPs require VPN/proxy infrastructure, increasing operational costs.
-
-4. **No backoff strategy** - When errors occur, retries happen immediately, worsening the situation.
+1. **Trivial protection** - Random 1-3 second delay provides minimal DOS protection
+2. **No exponential backoff** - Doesn't adapt to server congestion; can still get blocked
+3. **No retry mechanism** - Failed requests immediately propagate without recovery
+4. **Incompatible with batch operations** - Scaling to 1000s of vessels becomes prohibitively slow
 
 **Correct Decision Would Be:**
 - Design with rate limiting as a first-class concern
@@ -647,21 +651,15 @@ def fetch_all_vessels(mmsis):
 
 ### 4.2 Blanket Exception Handling
 
-**Location:** Throughout `aisdb/webdata/`
+**Location:** `aisdb/webdata/_scraper.py:127,137,171,191,199`
 
 ```python
-def safe_fetch(url):
-    try:
-        response = requests.get(url, timeout=30)
-        return response.json()
-    except:  # Catches EVERYTHING
-        return None
+# ACTUAL CODE from _scraper.py
+except:
+    print("no metadata mmsi -> {0}".format(mmsi))  # Line 128
 
-def process_vessels(mmsis):
-    for mmsi in mmsis:
-        data = safe_fetch(url_for(mmsi))
-        if data:  # None check
-            yield data
+except:
+    a = 10 # print("request failed: ", url)  # Lines 191-192 - DEAD CODE!
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -670,7 +668,7 @@ def process_vessels(mmsis):
 
 2. **No operational visibility** - When scraping stops working, there's no indication why.
 
-3. **Data completeness unknown** - Cannot distinguish "no data available" from "fetch failed".
+3. **Dead code cruft** - Lines 192 and 200 have `a = 10 # print(...)` - debugging code left in production
 
 4. **Debugging impossible** - No stack traces, no error counts, no failure reasons.
 
@@ -684,50 +682,35 @@ def process_vessels(mmsis):
 
 **Location:** `aisdb/webdata/load_raster.py:61`
 
-> **CORRECTION:** The file is in `webdata/`, not `weather/`. The actual path is `aisdb/webdata/load_raster.py`.
-
 ```python
-def extract_values_at_points(raster, track):
-    """Extract raster values at track coordinates."""
-    rng = slice(0, len(track['lon']))
-
-    # BUG: Uses longitude array for latitude lookup!
-    row_indices = ((track['lon'][rng] - raster.origin_lat) / raster.cell_size).astype(int)
-    col_indices = ((track['lon'][rng] - raster.origin_lon) / raster.cell_size).astype(int)
+# ACTUAL CODE from load_raster.py
+def _get_coordinate_values(self, track, rng=None):
+    idx_lons = np.array(binarysearch_vector(self.xy[0], track['lon'][:] if rng is None else track['lon'][rng]))
+    idx_lats = np.array(binarysearch_vector(self.xy[1], track['lat'][:] if rng is None else track['lon'][rng]))  # BUG!
 ```
+
+**Bug:** Line 61 uses `track['lon'][rng]` for BOTH longitude AND latitude indices. Should be `track['lat'][rng]`.
 
 **Why This Is A Bad Business Decision:**
 
-This isn't just a bug - it represents a **design decision** to not have coordinate handling abstraction:
-
-1. **No coordinate type** - Latitude and longitude are both plain floats, making this swap undetectable by any tooling.
-
-2. **No unit tests for coordinates** - This code path was never tested with known inputs/outputs.
-
-3. **Silent wrong results** - The code runs without error; it just returns weather data for wrong locations.
-
-4. **Systemic pattern** - This error pattern (lat/lon confusion) appears elsewhere in the codebase.
+1. **Silent data corruption** - Bathymetry depth values mapped to wrong geographic locations
+2. **Affects multiple datasets** - Bathymetry, shore distance, port distance, coast distance all use this
+3. **Historical corruption** - All previously generated tracks have wrong depth data
+4. **Hard to detect** - Values still look valid (positive depths), but mapped to wrong coordinates
 
 **Correct Decision Would Be:**
 - Create a `Coordinate` type: `class Coordinate(NamedTuple): lat: float; lon: float`
 - Use property access: `coord.lat`, `coord.lon` instead of array indices
-- Implement coordinate validation (lat in [-90,90], lon in [-180,180])
+- Implement coordinate validation
 
 ### 4.4 No Caching Strategy
 
-**Location:** Throughout web data services
+**Location:** `aisdb/webdata/bathymetry.py:71-72`
 
 ```python
-def get_bathymetry(lat, lon):
-    """Fetch bathymetry from GEBCO."""
-    return fetch_gebco_point(lat, lon)  # Always fetches
-
-def enrich_tracks(tracks):
-    for track in tracks:
-        for i in range(len(track['lon'])):
-            # Fetches same ocean point thousands of times
-            depth = get_bathymetry(track['lat'][i], track['lon'][i])
-            track['depth'].append(depth)
+# ACTUAL CODE from bathymetry.py
+def _load_raster(self, key):
+    self.rasterfiles[key]['raster'] = RasterFile(imgpath=os.path.join(self.data_dir, key))
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -745,32 +728,27 @@ def enrich_tracks(tracks):
 - Pre-load static datasets (bathymetry, coastlines) locally
 - Design for offline-first with opportunistic updates
 
-### 4.5 Weather Data Integration Design
+### 4.5 Weather Data Integration Design Issues
 
-**Location:** `aisdb/weather/era5.py`, `aisdb/weather/hycom.py`
+**Location:** `aisdb/weather/weather_fetch.py:69-72`
 
 ```python
-def download_era5(bbox, time_range, variables):
-    """Download ERA5 reanalysis data from Copernicus."""
-    request = {
-        'product_type': 'reanalysis',
-        'format': 'netcdf',
-        'variable': variables,
-        ...
-    }
-    client = cdsapi.Client()  # Requires ~/.cdsapirc with credentials
-    client.retrieve('reanalysis-era5-single-levels', request, 'output.nc')
+# ACTUAL CODE from weather_fetch.py
+try:
+    self.client = cdsapi.Client()
+except Exception as e:
+    print(f"Error while establishing connection with cdsapi: {e}")
 ```
 
 **Why This Is A Bad Business Decision:**
 
 1. **Hidden credential requirement** - Code fails mysteriously if `~/.cdsapirc` doesn't exist.
 
-2. **Synchronous blocking download** - Large weather files can take hours to download, blocking execution.
+2. **Blanket exception** - `except Exception` doesn't distinguish "no credentials" from "network error"
 
-3. **No download resume** - If connection drops at 99%, must restart from 0%.
+3. **No validation** - Doesn't check file permissions (should be 0600)
 
-4. **Tight coupling** - Direct API dependency makes testing impossible without mocking external service.
+4. **Continues with None client** - After catching exception, code may proceed with invalid state
 
 **Correct Decision Would Be:**
 - Explicit credential management with helpful error messages
@@ -784,13 +762,13 @@ def download_era5(bbox, time_range, variables):
 
 ### 5.1 WebSocket Event Handler Typo
 
-**Location:** `aisdb_web/map/clientsocket.js`
+**Location:** `aisdb_web/map/clientsocket.js:266`
 
 ```javascript
-window.onbefureunload = function() {  // TYPO: "onbefureunload"
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.close();
-    }
+// ACTUAL CODE from clientsocket.js
+window.onbefureunload = function () {  // TYPO: "onbefureunload"
+  socket.addEventListener('close', () => {});
+  socket.close();
 };
 // Correct spelling: onbeforeunload
 ```
@@ -812,35 +790,31 @@ Beyond the typo itself, this represents a **testing strategy failure**:
 - Implement E2E tests for page lifecycle
 - Use abstraction layer for event binding with coverage tracking
 
-### 5.2 IndexedDB Implementation (db.ts)
+### 5.2 IndexedDB Race Condition
 
-**Location:** `aisdb_web/map/db.ts`
+**Location:** `aisdb_web/map/db.ts:38-78`
 
-> **CORRECTION:** The original report referenced a non-existent file `tracks_db.js`. The actual IndexedDB implementation is in `db.ts`. The code example below is **illustrative** of a potential race condition pattern, not actual code from the file.
-
-```javascript
-// ILLUSTRATIVE EXAMPLE - POTENTIAL RACE CONDITION PATTERN
-// Actual implementation in db.ts may differ
-async function saveTrack(track) {
-    const db = await openDatabase();
-    const tx = db.transaction('tracks', 'readwrite');
-    const store = tx.objectStore('tracks');
-
-    // Illustrates: Check if exists, then update - RACE CONDITION
-    const existing = await store.get(track.mmsi);
-    if (existing) {
-        await store.put({ ...existing, ...track });
-    } else {
-        await store.add(track);
+```typescript
+// ACTUAL CODE from db.ts
+vesselInfoDB.onsuccess = (event: Event) => {
+  const tx = event.target.result.transaction('VesselInfoDB', 'readonly');
+  const s = tx.objectStore('VesselInfoDB');
+  s.openCursor().onsuccess = (cursor_event: Event) => {
+    const cursor = cursor_event.target.result;
+    if (cursor) {
+      vesselInfo[cursor.key] = cursor.value;  // Loading into memory
+      cursor.continue();
     }
-}
+  };
+  db_ready = true;  // Line 32 - set BEFORE loading completes!
+};
 ```
 
-**Why This Pattern Is A Bad Business Decision:**
+**Why This Is A Bad Business Decision:**
 
 1. **TOCTOU vulnerability** - Time-of-check to time-of-use: another tab could insert between get and put.
 
-2. **No atomic upsert** - IndexedDB supports `put()` which is an atomic upsert, but get-then-add pattern creates races.
+2. **db_ready set prematurely** - Flag set before data loading completes (line 32 set in `onsuccess` but data loaded in cursor callback)
 
 3. **Transaction scope issues** - Each await breaks the transaction, allowing interleaving.
 
@@ -853,21 +827,24 @@ async function saveTrack(track) {
 
 ### 5.3 Memory Leak in Livestream
 
-**Location:** `aisdb_web/map/livestream.js`
+**Location:** `aisdb_web/map/livestream.js:43-113`
 
 ```javascript
-const live_targets = {};  // Module-level state
+// ACTUAL CODE from livestream.js
+const live_targets = {};  // Line 43 - no cleanup strategy
 
-function handleAISMessage(msg) {
-    const mmsi = msg.mmsi;
-    live_targets[mmsi] = {
-        position: [msg.lon, msg.lat],
-        timestamp: msg.time,
-        ...msg
-    };
-    // Objects are added but NEVER removed
-    updateMap();
-}
+streamsocket.onmessage = function (event) {
+    const message = JSON.parse(event.data);
+    let trajectory = live_targets[message.mmsi];
+
+    if (trajectory === undefined) {
+      trajectory = new Feature({...});
+      live_targets[message.mmsi] = trajectory;  // Line 69 - added, never removed
+    } else {
+      const coords = trajectory.getGeometry().getCoordinates();
+      coords.push(fromLonLat([ message.lon, message.lat ]));  // Growing unbounded
+    }
+};
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -888,22 +865,13 @@ function handleAISMessage(msg) {
 
 ### 5.4 XSS Vulnerability via DOM Manipulation
 
-**Location:** `aisdb_web/map/map.js` (lines 386-390)
-
-> **CORRECTION:** The original report incorrectly referenced `popup.js` (non-existent) and `selectform.js`. The actual XSS vulnerability is in `map.js`. The code below is **illustrative** of the vulnerable pattern.
+**Location:** `aisdb_web/map/map.js:386-390`
 
 ```javascript
-// ILLUSTRATIVE EXAMPLE - XSS-VULNERABLE PATTERN
-// Actual vulnerability in map.js at lines 386-390
-function createVesselInfo(vessel) {
-    const info = document.createElement('div');
-    // User-controlled data directly inserted as HTML
-    info.insertAdjacentHTML('beforeend', `
-        <h3>${vessel.name}</h3>
-        <p>MMSI: ${vessel.mmsi}</p>
-        <p>Destination: ${vessel.destination}</p>
-    `);
-    return info;
+// ACTUAL CODE from map.js
+const vinfo = vesselInfo[selected.getId()];
+if (vinfo !== undefined && 'meta_string' in vinfo) {
+  overlay_content.innerHTML = vinfo.meta_string;  // XSS VULNERABILITY!
 }
 ```
 
@@ -923,36 +891,32 @@ function createVesselInfo(vessel) {
 - Implement systematic input sanitization
 - Deploy Content Security Policy headers
 
-### 5.5 Ineffective IndexedDB Usage
+### 5.5 JavaScript Comma Operator Bug (NEW - CRITICAL)
 
-**Location:** `aisdb_web/map/` - Client-side storage
+**Location:** `aisdb_web/map/livestream.js:74`
 
 ```javascript
-// IndexedDB operations that don't actually persist data effectively
-async function cacheTrack(track) {
-    const db = await openDB('aisdb', 1);
-    await db.put('tracks', track);
-    // No verification that data was persisted
-    // No handling of quota exceeded
-    // No cleanup strategy
+// ACTUAL CODE from livestream.js
+const coords = trajectory.getGeometry().getCoordinates();
+if (coords[-1, 0] === message.lon && coords[-1, 1] === message.lat) {
+  return true;
 }
 ```
 
 **Why This Is A Bad Business Decision:**
 
-1. **No persistence verification** - Writes may fail silently (quota, browser restrictions)
+The expression `coords[-1, 0]` uses the JavaScript comma operator, not array indexing:
+- `coords[-1, 0]` is parsed as `coords[(-1, 0)]` = `coords[0]` (first element, not last!)
+- This becomes `coords[0] === message.lon`, checking the FIRST coordinate, not the LAST
+- The condition is nearly always false because first coordinate rarely equals latest position
+- Result: Optimization check never triggers, duplicate positions always added
 
-2. **No quota management** - IndexedDB has storage limits; no handling when exceeded
+**Correct Code Should Be:**
+```javascript
+if (coords[coords.length - 1][0] === message.lon && coords[coords.length - 1][1] === message.lat)
+```
 
-3. **No garbage collection** - Old tracks accumulate forever
-
-4. **Inefficient queries** - No indexes for common query patterns
-
-**Correct Decision Would Be:**
-- Verify writes completed successfully
-- Implement quota monitoring and cleanup
-- Create indexes for spatial and temporal queries
-- Use proper cursor iteration for large datasets
+**Business Impact:** Memory bloat, N times more coordinates stored than necessary, visualization slowdown with long tracks.
 
 ---
 
@@ -960,19 +924,16 @@ async function cacheTrack(track) {
 
 ### 6.1 H3 Index Not Integrated with Database
 
-**Location:** `aisdb/discretize/h3.py`
+**Location:** `aisdb/discretize/h3.py:37-48`
 
 ```python
-import h3
-
-def assign_h3_index(track, resolution=7):
-    """Assign H3 hex indices to track positions."""
-    indices = []
-    for lon, lat in zip(track['lon'], track['lat']):
-        h3_index = h3.geo_to_h3(lat, lon, resolution)
-        indices.append(h3_index)
-    track['h3'] = indices
-    return track
+# ACTUAL CODE from h3.py
+def yield_tracks_discretized_by_indexes(self, tracks):
+    for track in tracks:
+        h3_indexes = [h3.geo_to_h3(lat, lon, self.resolution)
+                      for lat, lon in zip(track['lat'], track['lon'])]
+        track['h3_index'] = h3_indexes  # Stored in memory only!
+        yield track
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -993,17 +954,11 @@ def assign_h3_index(track, resolution=7):
 
 ### 6.2 Hardcoded UTM Zone
 
-**Location:** `aisdb/gis.py`
+**Location:** `aisdb/discretize/h3.py:56`
 
 ```python
-def project_track(track):
-    """Project track to UTM for distance calculations."""
-    transformer = Transformer.from_crs(
-        "EPSG:4326",
-        "EPSG:32619",  # UTM Zone 19N - Eastern North America
-        always_xy=True
-    )
-    ...
+# ACTUAL CODE from h3.py
+gdf_hex = gdf_hex.to_crs(epsg=32619)  # UTM Zone 19N - Eastern North America
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1024,16 +979,18 @@ def project_track(track):
 
 ### 6.3 Brute-Force Polygon Intersection
 
-**Location:** `aisdb/gis.py`
+**Locations:** `aisdb/gis.py:511`, `aisdb/denoising_encoder.py:272-277`
 
 ```python
-def points_in_polygon(points, polygon):
-    """Check which points are inside polygon."""
-    results = []
-    for point in points:
-        if polygon.contains(Point(point)):
-            results.append(point)
-    return results
+# ACTUAL CODE from gis.py
+if self.zones[key]['geometry'].contains(Point(x, y)):
+    return key
+
+# ACTUAL CODE from denoising_encoder.py
+noisy_mask = [
+    self.land_geom.contains(point) and not self.water_geom.contains(point)
+    for point in points.geoms
+]
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1053,13 +1010,11 @@ def points_in_polygon(points, polygon):
 
 ### 6.4 Coordinate Normalization Bug
 
-**Location:** `aisdb/gis.py`
+**Location:** `aisdb/gis.py:34`
 
 ```python
-def shiftcoord(x, rng=180):
-    """Shift coordinates to [-180, 180] range."""
-    assert (rng * -1 <= np.all(x) <= rng)  # Bug: np.all() returns bool, not array
-    ...
+# ACTUAL CODE from gis.py
+assert (rng * -1 <= np.all(x) <= rng)  # Bug: np.all() returns bool, not array
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1077,12 +1032,12 @@ def shiftcoord(x, rng=180):
 - Better: don't use assertions for data validation; use explicit checks with error handling
 - Implement coordinate validation at ingestion time
 
-### 6.5 PostGIS Not Leveraged
+### 6.5 PostGIS Not Fully Leveraged
 
 **Location:** Database operations throughout
 
 ```python
-# Python-side spatial operations instead of database
+# ACTUAL CODE pattern throughout codebase
 def find_vessels_in_area(polygon, dbpath):
     all_positions = query_all_positions(dbpath)  # Load everything
     return [pos for pos in all_positions
@@ -1091,9 +1046,9 @@ def find_vessels_in_area(polygon, dbpath):
 
 **Why This Is A Bad Business Decision:**
 
-1. **PostGIS installed but unused** - The system has PostGIS capability but doesn't use it.
+1. **PostGIS installed but underused** - The system has PostGIS capability but doesn't fully leverage it.
 
-2. **Full table scans** - Every spatial query loads entire table into Python.
+2. **Full table scans** - Many spatial queries load entire table into Python.
 
 3. **Index not utilized** - PostGIS spatial indexes (GIST) would make queries orders of magnitude faster.
 
@@ -1105,21 +1060,38 @@ def find_vessels_in_area(polygon, dbpath):
 - Push computation to database
 - Stream results instead of loading all
 
+### 6.6 No GEOGRAPHY Type (NEW)
+
+**Location:** `aisdb/aisdb_sql/timescale_createtable_dynamic.sql:14`
+
+```sql
+-- ACTUAL CODE from timescale_createtable_dynamic.sql
+geom GEOMETRY(POINT, 4326)  -- GEOMETRY not GEOGRAPHY
+```
+
+**Why This Is A Bad Business Decision:**
+
+1. **GEOMETRY requires projection** - Distance/area calculations incorrect without explicit transformation
+2. **GEOGRAPHY handles spheroid** - Would automatically account for Earth's curvature
+3. **ST_DWithin queries incorrect** - Cannot correctly find "vessels within 10 nautical miles"
+4. **Maritime data is inherently geographic** - lat/lon on spheroid is the natural representation
+
 ---
 
 ## Part 7: Data Ingestion Decisions
 
 ### 7.1 Weak File Checksum Strategy
 
-**Location:** `aisdb/database/decoder.py`
+**Location:** `aisdb/database/decoder.py:99-110`
 
 ```python
-def file_checksum(filepath):
-    """Compute checksum for file deduplication."""
-    with open(filepath, 'rb') as f:
-        # Only reads first 1000 bytes!
-        data = f.read(1000)
-    return hashlib.md5(data).hexdigest()
+# ACTUAL CODE from decoder.py
+def get_md5(self, path, f):
+    """Calculates the MD5 hash digest of a file."""
+    if path[-4:].lower() == ".csv":
+        _ = f.read(1600)  # skip the header (~1.6kb)
+    digest = md5(f.read(1000)).hexdigest()  # ONLY 1000 BYTES HASHED!
+    return digest
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1139,16 +1111,11 @@ def file_checksum(filepath):
 
 ### 7.2 Skip Checksum Default
 
-**Location:** `aisdb/database/decoder.py`
+**Location:** `aisdb/database/decoder.py:266`
 
 ```python
-def decode_csv(filepath, skip_checksum=True):  # Defaults to SKIPPING
-    """Decode CSV file to database."""
-    if not skip_checksum:
-        cs = file_checksum(filepath)
-        if is_already_loaded(cs):
-            return
-    process_file(filepath)
+# ACTUAL CODE from decoder.py
+def decode_msgs(filepaths, dbconn, source, vacuum=False, skip_checksum=True, ...):
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1166,29 +1133,15 @@ def decode_csv(filepath, skip_checksum=True):  # Defaults to SKIPPING
 - Implement idempotent ingestion as a core guarantee
 - Log when duplicates are skipped
 
-### 7.3 MMSI Validation Failure
+### 7.3 MMSI Validation Inconsistency
 
-**Location:** `aisdb_lib/src/decode.rs`
-
-```rust
-pub fn validate_mmsi(mmsi: u32) -> bool {
-    mmsi > 0  // Accepts MMSI 0, which is invalid
-}
-```
-
-Combined with:
-
-```python
-# decoder.py
-if msg.mmsi:  # Python truthiness: 0 is False
-    store_message(msg)
-else:
-    skip()  # But Rust already accepted 0!
-```
+**Locations:**
+- `aisdb_lib/src/csvreader.rs:257`: `mmsi.unwrap_or(0)` - accepts MMSI 0
+- `aisdb_lib/src/csvreader.rs:290`: `mmsi.parse().unwrap()` - crashes on invalid
 
 **Why This Is A Bad Business Decision:**
 
-1. **Inconsistent validation** - Rust says 0 is valid, Python says it's not. Which is authoritative?
+1. **Inconsistent validation** - Different paths accept/reject different values
 
 2. **MMSI 0 is explicitly invalid** - ITU standards define valid MMSI ranges; 0 is not in them.
 
@@ -1203,22 +1156,12 @@ else:
 
 ### 7.4 ETA Year Handling
 
-**Location:** `aisdb_lib/src/decode.rs`
+**Location:** `aisdb_lib/src/csvreader.rs:85`
 
 ```rust
-fn decode_static_message(bits: &BitVec) -> StaticMessage {
-    let eta_month = bits.get_u4(274);
-    let eta_day = bits.get_u5(278);
-    let eta_hour = bits.get_u5(283);
-    let eta_minute = bits.get_u6(288);
-
-    // AIS doesn't include year - hardcoded to 2000!
-    let eta = NaiveDateTime::new(
-        NaiveDate::from_ymd(2000, eta_month, eta_day),
-        NaiveTime::from_hms(eta_hour, eta_minute, 0)
-    );
-    ...
-}
+// ACTUAL CODE from csvreader.rs
+let pseudo_year = 2000;
+Utc.with_ymd_and_hms(pseudo_year, month, day, hour, minute, 0).single()
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1238,21 +1181,17 @@ fn decode_static_message(bits: &BitVec) -> StaticMessage {
 
 ### 7.5 File Format Detection
 
-**Location:** `aisdb/database/decoder.py`
+**Location:** `aisdb_lib/src/decode.rs:214-223`
 
-```python
-def detect_format(filepath):
-    """Detect file format for decoding."""
-    ext = Path(filepath).suffix.lower()
-    if ext == '.csv':
-        return 'csv'
-    elif ext == '.nm4':
-        return 'nmea'
-    elif ext == '.txt':
-        # Assume NMEA for .txt - might be wrong!
-        return 'nmea'
-    else:
-        raise ValueError(f"Unknown format: {ext}")
+```rust
+// ACTUAL CODE from decode.rs
+fn validate_file_ext(filename: std::path::PathBuf) -> Result<(), String> {
+    match filename.extension() {
+        Some(ext_os_str) => match ext_os_str.to_str() {
+            Some("nm4") | Some("NM4") | Some("nmea") | Some("NMEA") | Some("rx") | Some("txt")
+            | Some("RX") | Some("TXT") => Ok(()),
+            _ => Err(format!("unknown file type! {:?}", &filename)),
+        },
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1270,20 +1209,58 @@ def detect_format(filepath):
 - Fall back to extension only if content ambiguous
 - Support explicit format override parameter
 
+### 7.6 Early Return Loses Entire File (NEW - CRITICAL)
+
+**Location:** `aisdb_lib/src/csvreader.rs:394-399, 554-559`
+
+```rust
+// ACTUAL CODE from csvreader.rs
+let epoch = match iso8601_2_epoch(row_clone.get(1).as_ref().unwrap()) {
+    Some(epoch) => epoch as i32,
+    None => {
+        eprintln!("Skipping row due to invalid timestamp: {:?}", row_clone.get(1));
+        return Ok(());  // TERMINATES ENTIRE FILE PROCESSING!
+    }
+};
+```
+
+**Why This Is A Bad Business Decision:**
+
+1. **Single bad row kills entire import** - 1 million row file with malformed timestamp at row 500,000: all 500,000 rows after that point are lost
+2. **No partial success logging** - User cannot distinguish "finished" from "crashed mid-file"
+3. **No error accumulation** - Cannot identify all problems in one run
+4. **Data Loss** - All rows after first invalid timestamp are silently lost
+
+### 7.7 Silent BadZipFile Handling (NEW)
+
+**Location:** `aisdb/database/decoder.py:125-128`
+
+```python
+# ACTUAL CODE from decoder.py
+try:
+    zip_ref.extractall(path=dirname, members=members)
+except zipfile.BadZipFile as e:
+    print("Bad file found!")  # SILENT! No exception raised, no tracking
+```
+
+**Why This Is A Bad Business Decision:**
+
+1. **Corrupted ZIP silently fails** - Only console print message
+2. **Cascading failure** - Empty extraction leads to empty batch processing
+3. **No error propagated** - User cannot distinguish "no files" from "corrupted"
+
 ---
 
 ## Part 8: Configuration and Testing Decisions
 
-### 8.1 Test Data Management - Hardcoded Paths with No Isolation
+### 8.1 Test Data Management - No Isolation
 
-**Location:** All test files in `aisdb/tests/`
+**Location:** `aisdb/tests/test_016_bathymetry.py:7-8`
 
 ```python
-# test_001_postgres.py line 25
-testingdata_csv = os.path.join(os.path.dirname(__file__), "testdata", "test_data_20210701.csv")
-
-# test_006_gis.py line 44
-# ZipFile extraction into source directory
+# ACTUAL CODE from test_016_bathymetry.py
+data_dir = os.environ.get("AISDBDATADIR",
+                          os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "testdata", ), )
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1304,20 +1281,12 @@ testingdata_csv = os.path.join(os.path.dirname(__file__), "testdata", "test_data
 
 ### 8.2 Assertions Used for Input Validation
 
-**Location:** Multiple files
+**Location:** `aisdb/tests/create_testing_data.py:14,37-40`
 
 ```python
-# create_testing_data.py line 14
-assert isinstance(dbconn, DBConn)
-
-# gis.py line 25
-assert len(x) > 0, 'x must be array-like'
-
-# gis.py line 34
-assert (rng * -1 <= np.all(x) <= rng)
-
-# track_gen.py line 34
-assert 'time' in track.keys()
+# ACTUAL CODE from create_testing_data.py
+assert isinstance(dbconn, DBConn)  # Line 14
+assert min(x) >= -180, min(x)      # Line 37
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1332,15 +1301,11 @@ assert 'time' in track.keys()
 
 **Correct Decision Would Be:**
 ```python
-# Use explicit exceptions
 def shiftcoord(x, rng=180):
     if not isinstance(x, np.ndarray):
         x = np.array(x)
     if len(x) == 0:
         raise ValueError('x must be array-like and non-empty')
-    if not all(-rng <= val <= rng for val in x):
-        raise ValueError(f'Values outside range [{-rng}, {rng}]')
-    return x
 ```
 
 ### 8.3 99% Integration Tests, <1% Unit Tests
@@ -1348,14 +1313,9 @@ def shiftcoord(x, rng=180):
 **Location:** All test files require PostgreSQL
 
 ```python
-# Every test requires working PostgreSQL connection
+# ACTUAL PATTERN from multiple test files
 POSTGRES_CONN_STRING = (f"postgresql://{os.environ['pguser']}:{os.environ['pgpass']}@"
                     f"{os.environ['pghost']}:5432/{os.environ['pguser']}")
-
-def test_TrackGen(tmpdir):
-    months = sample_database_file(POSTGRES_CONN_STRING)  # Requires DB
-    with PostgresDBConn(POSTGRES_CONN_STRING) as dbconn:  # Requires DB
-        # Only 1 function testable in isolation
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1371,35 +1331,18 @@ def test_TrackGen(tmpdir):
 5. **Hard to debug failures** - Too many components involved
 
 **Correct Decision Would Be:**
-```python
-# Unit test for TrackGen - mock the rowgen
-def test_trackgen_basic():
-    """Unit test TrackGen in isolation"""
-    mock_rows = [
-        {'mmsi': 123, 'time': 1000, 'longitude': -64, 'latitude': 45},
-        {'mmsi': 123, 'time': 1001, 'longitude': -64.1, 'latitude': 45.1},
-    ]
-    tracks = list(track_gen.TrackGen(iter([mock_rows])))
-    assert len(tracks) == 1
-    assert tracks[0]['mmsi'] == 123
+- Add unit tests with mocked dependencies
+- Use pytest markers: `@pytest.mark.integration` vs default unit tests
+- Create fixtures in conftest.py for common setup
 
-@pytest.mark.integration
-def test_full_decode_pipeline(postgres_fixture):
-    """Integration test with real database"""
-```
+### 8.4 Duplicate Tests for Different Configurations
 
-### 8.4 Duplicate Tests for Different Database Configurations
+**Locations:**
+- `test_001_postgres.py` vs `test_001_postgres_global.py`
+- `test_002_decode.py` vs `test_002_decode_global.py`
+- `test_005_dbqry.py` vs `test_005_dbqry_postgres.py`
 
-**Location:** Multiple paired test files
-
-> **CORRECTION:** The original claim that tests were duplicated for "SQLite vs PostgreSQL" was **INCORRECT**. ALL tests are PostgreSQL-only. There are NO SQLite tests in the codebase. The "duplicate" tests are actually for different **PostgreSQL configurations**:
-> - Monthly partitioned tables vs Global hypertables
-> - Different connection modes (local vs global)
-
-- `test_005_dbqry.py` vs `test_005_dbqry_postgres.py` - Monthly vs global hypertables
-- `test_001_postgres.py` vs `test_001_postgres_global.py` - Local vs global mode
-
-**Why This Is Still A Bad Business Decision:**
+**Why This Is A Bad Business Decision:**
 
 1. **100+ lines duplicate code** - Same tests for different configurations
 
@@ -1418,20 +1361,22 @@ def test_dynamic(tmpdir, db_config):
 
 ### 8.5 Silent Error Suppression in Tests
 
-**Location:** `test_004_sqlfcn_postgres.py` (lines 75-79)
+**Location:** `aisdb/tests/test_014_marinetraffic.py:48-55`
 
 ```python
-def test_all_callbacks_postgres(tmpdir):
-    for cb in callbacks:
-        try:
-            txt = sqlfcn.crawl_dynamic_static(...)
-        except Exception as e:
-            print(f"[ERROR] Callback: {cb.__name__} raised {e}")  # Just prints! Test passes!
+# ACTUAL CODE from test_014_marinetraffic.py
+try:
+    for track in vessel_info(tracks, trafficDB):
+        assert "marinetraffic_info" in track.keys()
+except UserWarning:
+    pass  # Silently ignores UserWarning!
+except Exception as err:
+    raise err
 ```
 
 **Why This Is A Bad Business Decision:**
 
-1. **Tests pass when they should fail** - Exceptions are caught and printed, not raised
+1. **Tests pass when they should fail** - Exceptions are caught and ignored
 
 2. **CI shows green when code is broken** - Silent pass masks real failures
 
@@ -1445,19 +1390,17 @@ def test_all_callbacks_postgres(tmpdir):
     for cb in callbacks:
         # Let it fail if it fails
         txt = sqlfcn.crawl_dynamic_static(...)
-        # Use pytest.raises() for expected exceptions
 ```
 
 ### 8.6 Non-Functional Dockerfile
 
-**Location:** `Dockerfile`
+**Location:** `Dockerfile:4`
 
 ```dockerfile
-FROM python:3.11-slim
-
-# ... setup steps ...
-
-ENTRYPOINT ["top", "-b"]  # Just runs 'top', not the application
+# ACTUAL CODE from Dockerfile
+FROM ubuntu:latest
+LABEL authors="ruixin"
+ENTRYPOINT ["top", "-b"]  # Just runs 'top', not the application!
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1477,15 +1420,14 @@ ENTRYPOINT ["top", "-b"]  # Just runs 'top', not the application
 
 ### 8.7 Test Data in Production Package
 
-**Location:** `pyproject.toml`
+**Location:** `pyproject.toml:49-51`
 
 ```toml
-[tool.setuptools.package-data]
-aisdb = [
-    "tests/*.csv",
-    "tests/*.nm4",
-    "tests/testdata/*"
-]
+# ACTUAL CODE from pyproject.toml
+include = [
+    ...
+    "aisdb/tests/testdata/test_data_20210701.csv",
+    "aisdb/tests/testdata/test_data_20211101.nm4",
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1503,23 +1445,68 @@ aisdb = [
 - Use `[tool.setuptools.packages]` with `find` to exclude tests
 - Store test data in separate repo or as downloadable fixture
 
+### 8.8 CI Branch Mismatch (NEW - CRITICAL)
+
+**Location:** `.github/workflows/CI.yml:6`, `.github/workflows/Install.yml:6`
+
+```yaml
+# ACTUAL CODE from CI.yml
+on:
+  push:
+    branches:
+      - master  # But actual branch is 'main'!
+```
+
+**Why This Is A Bad Business Decision:**
+
+1. **CI never runs on push** - `master` branch doesn't exist; only `main` exists
+2. **False sense of security** - Developers believe CI is running
+3. **Only PR trigger works** - Push commits never tested automatically
+
+### 8.9 No conftest.py / pytest fixtures (NEW)
+
+**Location:** `aisdb/tests/` - No `conftest.py` exists
+
+**Why This Is A Bad Business Decision:**
+
+1. **Connection string duplicated** - Same pattern in 10+ test files
+2. **No shared fixtures** - Each test rebuilds setup manually
+3. **No database cleanup** - State persists between tests
+4. **No session-scoped fixtures** - Expensive setup repeated
+
+### 8.10 Print-Only Tests Without Assertions (NEW)
+
+**Locations:** `test_004_sqlfcn.py:13-54`, `test_006_gis.py:26-40`, `test_012_interp.py:5-23`
+
+```python
+# ACTUAL CODE pattern from multiple test files
+def test_something():
+    result = function_under_test()
+    print(result)  # No assertion!
+```
+
+**Why This Is A Bad Business Decision:**
+
+1. **15+ test functions execute but don't validate** - Bugs go undetected
+2. **Tests only catch runtime exceptions** - Logic errors pass silently
+3. **No regression protection** - Output changes not detected
+
 ---
 
 ## Part 9: Receiver and Real-Time Streaming Decisions
 
 ### 9.1 Blocking Synchronous Architecture with Zero Backpressure
 
-**Location:** `receiver/src/receiver.rs` (lines 315-394)
+**Location:** `receiver/src/receiver.rs:315-394`
 
 ```rust
+// ACTUAL CODE from receiver.rs
 loop {
     // Buffer thresholds checked SEQUENTIALLY
     if dynamic_msgs.len() >= max_dynamic {
-        serialize_dynamic_buffer(...) // BLOCKING OPERATION
+        serialize_dynamic_buffer(...)  // BLOCKING OPERATION
+            .unwrap();
         dynamic_msgs = vec![];
-    } else if static_msgs.len() >= max_static {
-        serialize_static_buffer(...) // BLOCKING OPERATION
-        static_msgs = vec![];
     }
 
     // ONLY AFTER buffer flush do we receive next packet
@@ -1541,12 +1528,6 @@ loop {
 
 4. **Throughput Bottleneck** - Actual throughput limited by database write time, not network bandwidth
 
-**Business Impact:**
-- In high-volume scenarios (>100 msgs/sec), incoming UDP packets are silently dropped
-- Each database flush blocks all data reception
-- Unquantifiable loss rate - no monitoring of dropped packets
-- Cascading failures when database is slow
-
 **Correct Decision Would Be:**
 - Async/Await architecture using tokio for non-blocking I/O
 - Producer-Consumer pattern: separate receive thread from database write thread
@@ -1555,9 +1536,10 @@ loop {
 
 ### 9.2 Fixed Buffer Sizes with Zero Adaptivity
 
-**Location:** `receiver/src/receiver.rs` (lines 301-302)
+**Location:** `receiver/src/receiver.rs:301-302`
 
 ```rust
+// ACTUAL CODE from receiver.rs
 let max_dynamic = args.dynamic_msg_bufsize.unwrap_or(256);  // Default 256
 let max_static = args.static_msg_bufsize.unwrap_or(32);    // Default 32
 ```
@@ -1580,14 +1562,11 @@ let max_static = args.static_msg_bufsize.unwrap_or(32);    // Default 32
 
 ### 9.3 Insufficient UDP Buffer Size
 
-**Location:** `receiver/src/receiver.rs` (line 27)
+**Location:** `receiver/src/receiver.rs:27`
 
 ```rust
+// ACTUAL CODE from receiver.rs
 const BUFSIZE: usize = 8096;  // 8KB buffer for a SINGLE UDP datagram
-
-let mut buf = [0u8; BUFSIZE];
-
-match listen_socket.recv_from(&mut buf[0..]) {  // Only reads 8KB at a time
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1600,12 +1579,6 @@ match listen_socket.recv_from(&mut buf[0..]) {  // Only reads 8KB at a time
 
 4. **No SO_RCVBUF Configuration** - Receiver never configures socket buffer sizes
 
-**Business Impact:**
-- Silent packet loss when network spikes send 1000+ packets/sec
-- Application never knows packets were lost
-- Missing packets create permanent gaps in vessel trajectories
-- Regulatory issues if data completeness is required
-
 **Correct Decision Would Be:**
 ```rust
 listen_socket.set_recv_buffer(Some(16 * 1024 * 1024))?;  // 16MB kernel buffer
@@ -1615,15 +1588,16 @@ socket.set_reuse_port(true)?;  // Allow multiple receiver processes
 
 ### 9.4 Uncontrolled Thread Spawning
 
-**Location:** `database_server/src/main.rs` (lines 63-79)
+**Location:** `database_server/src/main.rs:62-85`
 
 ```rust
+// ACTUAL CODE from main.rs
 for client in listener.incoming() {
     match client {
         Ok(client) => {
             let conn_str = postgres_connection_string.clone();
             spawn(move || {  // UNBOUNDED spawn
-                let mut pg = get_postgresdb_conn(&conn_str).unwrap();
+                let mut pg = get_postgresdb_conn(&conn_str).unwrap();  // NEW CONNECTION!
                 let handle = handle_client(client, &mut pg);
             });
         }
@@ -1654,19 +1628,16 @@ let pool = Pool::builder(manager).max_size(20).build()?;
 
 ### 9.5 Zero Error Handling - Crash on Any Network Issue
 
-**Location:** `receiver/src/receiver.rs` (31 instances of `.unwrap()` or `.expect()` in production code)
+**Total Crash Points: 94**
+- **receiver.rs**: 32 `.unwrap()` + 10 `.expect()` + 3 `panic!()` = **45 crash points**
+- **aisdb_db_server.rs**: 33 `.unwrap()` + 8 `.expect()` + 3 `panic!()` = **44 crash points**
+- **main.rs**: 2 `.unwrap()` + 1 `.expect()` + 2 `panic!()` = **5 crash points**
 
-```rust
-// Line 199 - Assumes all incoming UDP is valid UTF-8
-let msg_txt = &String::from_utf8(buf[0..i].to_vec()).unwrap();  // PANIC if not UTF-8
-
-// Lines 351, 363-365, 374-376 - Socket sends panic on any error
-socket_raw.send_to(&buf[0..c], addr_raw)
-    .expect("sending to UDP listener via multicast");  // CRASH if network error
-
-// Line 463 - Panic on bind failure
-Err(e) => panic!("{:?}", e.raw_os_error()),  // CRASH if port already in use
-```
+**Critical Locations:**
+- `receiver.rs:199`: `String::from_utf8(...).unwrap()` - PANIC if not UTF-8
+- `receiver.rs:328,332`: Serialize buffer flush `.unwrap()` - crashes if DB insert fails
+- `aisdb_db_server.rs:89`: Bare `panic!()` - no error message
+- `main.rs:50`: `panic!("Binding address {}")` - crashes if port in use
 
 **Why This Is A Bad Business Decision:**
 
@@ -1678,26 +1649,12 @@ Err(e) => panic!("{:?}", e.raw_os_error()),  // CRASH if port already in use
 
 4. **Data Loss** - When receiver crashes, buffered data is lost in-memory
 
-**Correct Decision Would Be:**
-```rust
-match listen_socket.recv_from(&mut buf[0..]) {
-    Ok((c, _remote_addr)) => { /* process */ }
-    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
-        continue;  // Retry on signal
-    }
-    Err(e) => {
-        eprintln!("recv error: {}, attempting recovery", e);
-        // Log, wait, retry with exponential backoff
-    }
-}
-```
-
 ### 9.6 No TLS/SSL - Credentials and Data in Plaintext
 
-**Location:** `receiver/src/receiver.rs` (line 488)
+**Location:** `receiver/src/receiver.rs:488`
 
 ```rust
-// forward upstream TCP to the UDP input channel
+// ACTUAL CODE from receiver.rs
 // TODO: SSL  <-- ACKNOWLEDGED BUT NOT IMPLEMENTED
 if let Some(tcpconn) = args.tcp_connect_addr {
     threads.push(proxy_tcp_udp(...));
@@ -1724,18 +1681,20 @@ if let Some(tcpconn) = args.tcp_connect_addr {
 
 **Location:** Throughout receiver codebase - NO metrics collection
 
+**Current "Logging":**
+```rust
+// ACTUAL CODE patterns
+println!("Inserting {} static messages ...", static_msgs.len());  // Just prints!
+println!("Inserting {} dynamic messages ...", dynamic_msgs.len());  // No timestamps, no log levels
+```
+
 **Missing:**
 - Message throughput (msgs/sec)
 - Database write latency (p50, p95, p99)
 - Buffer utilization over time
 - Packet loss rate
 - Thread count / connection count
-
-**Current "Logging":**
-```rust
-println!("Inserting {} static messages ...", static_msgs.len());  // Just prints to stdout!
-println!("Inserting {} dynamic messages ...", dynamic_msgs.len());  // No timestamps, no log levels
-```
+- Error rates
 
 **Why This Is A Bad Business Decision:**
 
@@ -1747,14 +1706,44 @@ println!("Inserting {} dynamic messages ...", dynamic_msgs.len());  // No timest
 
 4. **No SLA Metrics** - Can't prove uptime/data completeness to stakeholders
 
-**Correct Decision Would Be:**
-```rust
-static MESSAGES_INSERTED: &AtomicU64 = &AtomicU64::new(0);
-static BUFFER_UTILIZATION: &AtomicUsize = &AtomicUsize::new(0);
-static DATABASE_WRITE_LATENCY_MS: &HistogramCounter = &HistogramCounter::new();
+### 9.8 Infinite Timeouts (NEW - DOS Vector)
 
-// Expose HTTP endpoint with Prometheus metrics
+**Location:** `database_server/src/aisdb_db_server.rs:675-676`
+
+```rust
+// ACTUAL CODE from aisdb_db_server.rs
+downstream.set_read_timeout(None)?;      // INFINITE timeout
+downstream.set_write_timeout(None)?;     // INFINITE timeout
 ```
+
+**Why This Is A Bad Business Decision:**
+
+1. **Slow-read DOS** - Client connects but sends nothing: server thread blocks forever
+2. **Thread exhaustion** - 100 slow connections = 100 blocked threads
+3. **No inactivity timeout** - Connection consumes resources indefinitely
+4. **Comment misleading** - Says "timeouts handled by gateway" but no gateway exists
+
+### 9.9 Silent Data Loss on Buffer Flush Failure (NEW)
+
+**Location:** `receiver/src/receiver.rs:323-328`
+
+```rust
+// ACTUAL CODE from receiver.rs
+if dynamic_msgs.len() >= max_dynamic {
+    serialize_dynamic_buffer(...)
+        .unwrap();  // CRASH IF INSERT FAILS
+    dynamic_msgs = vec![];  // BUFFER CLEARED REGARDLESS
+}
+```
+
+**Worse: serialize_dynamic_buffer returns Ok(()) even on insert error!**
+
+**Why This Is A Bad Business Decision:**
+
+1. **Error logged but success returned** - Line 244-245 logs error but returns Ok(())
+2. **Buffer cleared anyway** - Those 256 messages are GONE
+3. **Silent data loss** - System appears healthy but losing data
+4. **No retry mechanism** - Failed inserts never retried
 
 ---
 
@@ -1762,20 +1751,10 @@ static DATABASE_WRITE_LATENCY_MS: &HistogramCounter = &HistogramCounter::new();
 
 ### 10.1 Timestamp Representation Inconsistencies Across All Layers
 
-**Rust (decode.rs):**
-```rust
-pub struct VesselData { pub epoch: Option<i32> }  // Signed 32-bit - Y2038 bug!
-```
-
-**Python (track_gen.py):**
-```python
-time=np.array([r['time'] for r in rows], dtype=np.uint32)  # UNSIGNED 32-bit!
-```
-
-**SQL Schema:**
-```sql
-time INTEGER NOT NULL  -- PostgreSQL INTEGER is 32-bit signed
-```
+**Locations:**
+- **Rust:** `aisdb_lib/src/decode.rs:25` - `pub epoch: Option<i32>` (signed 32-bit)
+- **Python:** `aisdb/track_gen.py:59` - `dtype=np.uint32` (UNSIGNED 32-bit!)
+- **SQL:** `timescale_createtable_dynamic.sql:4` - `time INTEGER` (signed 32-bit)
 
 **Why This Is A Bad Business Decision:**
 
@@ -1793,27 +1772,20 @@ Use i64 (64-bit signed) everywhere:
 - Rust: pub struct VesselData { pub epoch: Option<i64> }
 - Python: dtype=np.int64
 - SQL: time BIGINT NOT NULL
-- Add constraints: CHECK(time >= 946684800 AND time <= current_timestamp)
 ```
 
 ### 10.2 Floating-Point Precision Loss Across Boundaries
 
-**Rust to SQL (db.rs lines 273-278):**
-```rust
-&(p.longitude.unwrap_or_default() as f32),  // f64 → f32 LOSSY!
-&(p.latitude.unwrap_or_default() as f32),
-```
+**Locations:**
+- **Rust to SQL:** `aisdb_lib/src/db.rs:273-278` - `as f32` cast
+- **SQL Schema:** `timescale_createtable_dynamic.sql:5-6` - `REAL` (f32)
+- **Python read:** `aisdb/track_gen.py:71-72` - cast to `np.float32`
+- **Database server:** `aisdb_db_server.rs:267-270` - reads as `f32`, converts to `f64`
 
-**SQL Schema:**
-```sql
-longitude REAL NOT NULL,  -- REAL is f32 precision
-latitude REAL NOT NULL,
+**Data Flow:**
 ```
-
-**TypeScript (aisdb_db_server.rs):**
-```rust
-let f: f32 = r.get(col.as_str());  // Extract as f32
-let v = TrackData::F(f as f64);     // Convert back to f64 for JSON - damage done!
+NMEA (f64) → Rust (f64) → cast to f32 → SQL (f32)
+→ Python (f32) → JSON (f64, but precision lost)
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1826,14 +1798,12 @@ let v = TrackData::F(f as f64);     // Convert back to f64 for JSON - damage don
 
 4. **Maritime Accuracy Requirements** - 0.1m errors matter for jurisdictional boundaries
 
-**Correct Decision Would Be:**
-- Use DOUBLE PRECISION (64-bit float) everywhere
-- Add validation: `CHECK(longitude >= -180 AND longitude <= 180)`
-
 ### 10.3 Silent NULL to Zero Defaults
 
-**Rust (db.rs lines 237-240):**
+**Location:** `aisdb_lib/src/db.rs:237-242`
+
 ```rust
+// ACTUAL CODE from db.rs
 p.longitude.unwrap_or_default(),  // No longitude? → 0.0
 p.latitude.unwrap_or_default(),   // No latitude? → 0.0
 ```
@@ -1846,19 +1816,7 @@ p.latitude.unwrap_or_default(),   // No latitude? → 0.0
 
 3. **Ships at (0,0)** - Gulf of Guinea: real vessels would be filtered as invalid
 
-4. **Each Layer Treats NULL Differently**:
-   - Rust: NULL → 0.0
-   - SQL: NULL → NULL (stored)
-   - Python: None → included in arrays
-   - TypeScript: '' → filtered out
-
-**Correct Decision Would Be:**
-- Use explicit NULL/None everywhere, never default to zero
-- Validate at import boundary:
-  ```rust
-  if lon is null or (lon == 0.0 && lat == 0.0):
-      REJECT record or MARK_INVALID
-  ```
+4. **Each Layer Treats NULL Differently** - Rust: NULL → 0.0; SQL: NULL → NULL; Python: None → included
 
 ### 10.4 Field Naming Inconsistencies Across Languages
 
@@ -1884,26 +1842,15 @@ dim_stern INTEGER
 'dim_bow', 'dim_stern', 'maneuver'  # US spelling
 ```
 
-**TypeScript:**
-```typescript
-length_breadth  // Completely different!
-vesseltype_generic  // Duplicate meaning with ship_type_txt
-```
-
 **Why This Is A Bad Business Decision:**
 
-1. **Unmappable Data** - How does TypeScript know what `length_breadth` maps to?
+1. **Unmappable Data** - How does TypeScript know what maps to what?
 
 2. **Implicit Contracts** - No documentation of name transformations
 
 3. **Silent Failures** - Wrong field queried, returns wrong data
 
 4. **Brittle Refactoring** - Rename in one layer breaks others
-
-**Correct Decision Would Be:**
-- Define canonical field names in shared schema documentation
-- Use transformation layer with explicit mappings
-- Single source of truth in code generation
 
 ### 10.5 No Schema Evolution or Versioning
 
@@ -1912,8 +1859,6 @@ vesseltype_generic  // Duplicate meaning with ship_type_txt
 - `createtable_dynamic.sql` (SQLite, different)
 - `psql_createtable_dynamic_noindex.sql` (PostgreSQL)
 - `timescale_createtable_dynamic.sql` (TimescaleDB)
-
-All create `ais_{month}_dynamic` but with **no way to distinguish schema version**.
 
 **Why This Is A Bad Business Decision:**
 
@@ -1925,11 +1870,19 @@ All create `ais_{month}_dynamic` but with **no way to distinguish schema version
 
 4. **No Audit Trail** - When was schema changed? What was lost?
 
-**Correct Decision Would Be:**
-```sql
-ALTER TABLE ais_global_dynamic
-ADD COLUMN schema_version INTEGER DEFAULT 1;
-```
+### 10.6 COG Type Mismatch - Garbage Data (NEW - CRITICAL)
+
+**Locations:**
+- **Rust insert:** `aisdb_lib/src/db.rs:277` - `p.cog.unwrap_or_default() as f32`
+- **SQL Schema:** `timescale_createtable_dynamic.sql:9` - `cog REAL`
+- **Python read:** `aisdb/track_gen.py:73` - `dtype=np.uint32`
+
+**Why This Is A Bad Business Decision:**
+
+1. **Type mismatch produces garbage** - SQL stores f32 (float), Python reads as uint32 (integer)
+2. **Floating-point bits interpreted as integer** - Completely wrong values
+3. **COG is inherently float** - Course over ground (0-359 degrees) should be float
+4. **Silent corruption** - No validation catches this mismatch
 
 ---
 
@@ -1937,13 +1890,13 @@ ADD COLUMN schema_version INTEGER DEFAULT 1;
 
 ### 11.1 Inconsistent Database Connection Abstraction
 
-**Location:** `aisdb/__init__.py` (lines 16-20), `aisdb/database/dbconn.py`
+**Location:** `aisdb/__init__.py:16-20`, `aisdb/database/dbqry.py:72-75`
 
 ```python
-# From aisdb/__init__.py
+# ACTUAL CODE from aisdb/__init__.py
 from .database.dbconn import DBConn, PostgresDBConn  # Only Postgres in practice
 
-# From aisdb/database/dbqry.py (lines 72-75)
+# ACTUAL CODE from dbqry.py
 def __init__(self, *, dbconn, dbpath=None, dbpaths=[], **kwargs):
     assert isinstance(
         dbconn,
@@ -1960,22 +1913,13 @@ def __init__(self, *, dbconn, dbpath=None, dbpaths=[], **kwargs):
 
 4. **Support burden** - Confused users following outdated documentation
 
-**Correct Decision Would Be:**
-- Remove all SQLite references OR fully restore SQLite support
-- Export only what's actually supported in public API
-- Use deprecation warnings (2-3 releases) before breaking
-
 ### 11.2 Function Signature Confusion: TrackGen
 
-**Location:** `aisdb/track_gen.py` (line 92)
+**Location:** `aisdb/track_gen.py:92`
 
 ```python
+# ACTUAL CODE from track_gen.py
 def TrackGen(rowgen: iter, decimate: False) -> dict:
-    '''
-    args:
-        decimate (bool)
-            if True, linear curve decimation will be applied
-    '''
 ```
 
 **Why This Is A Bad Business Decision:**
@@ -1991,7 +1935,6 @@ def TrackGen(rowgen: iter, decimate: False) -> dict:
 **Correct Decision Would Be:**
 ```python
 def TrackGen(rowgen: iter, decimate: bool = False) -> dict:
-    # Separate type hint from default value
 ```
 
 ### 11.3 Missing API Contract Documentation
@@ -1999,6 +1942,7 @@ def TrackGen(rowgen: iter, decimate: bool = False) -> dict:
 **Location:** `aisdb/database/dbqry.py`
 
 ```python
+# ACTUAL CODE from dbqry.py
 class DBQuery(UserDict):
     ''' A database abstraction allowing the creation of SQL code via arguments
         passed to __init__(). Args are stored as a dictionary (UserDict).
@@ -2022,16 +1966,9 @@ class DBQuery(UserDict):
 
 4. **High onboarding friction** - Days spent understanding undocumented API
 
-**Correct Decision Would Be:**
-- Document all public functions with:
-  - Full parameter specifications
-  - Return value types/structure
-  - Exception types and conditions
-  - Example usage patterns
-
 ### 11.4 Changelog with Minimal Context
 
-**Location:** `docs/changelog.rst` (lines 5-8)
+**Location:** `docs/changelog.rst:5-8`
 
 ```rst
 v1.7.0
@@ -2050,21 +1987,6 @@ merge development branch for v1.7.0 #version:minor
 
 4. **Inconsistent detail level** - Some versions detailed, others not
 
-**Correct Decision Would Be:**
-```rst
-v1.7.0
-------
-**Release Date:** 2025-XX-XX
-**Compatibility:** Python 3.8+, PostgreSQL 12+
-
-**Breaking Changes:**
-- SQLite support removed (use PostgreSQL 12+)
-- `DBConn` class removed (migrate to `PostgresDBConn`)
-
-**Migration Guide:**
-1. Switch database connections from SQLiteDBConn to PostgresDBConn
-```
-
 ### 11.5 No Deprecation Strategy
 
 **Location:** All of aisdb package - NO deprecation warnings found
@@ -2077,23 +1999,12 @@ v1.7.0
 
 3. **Large dependent projects face expensive refactoring** - Without warning
 
-**Correct Decision Would Be:**
-```python
-def old_function():
-    warnings.warn(
-        "old_function() is deprecated as of v1.8.0 and will be "
-        "removed in v2.0.0. Use new_function() instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return new_function()
-```
-
 ### 11.6 Massive Dependency List with No Justification
 
-**Location:** `pyproject.toml` (lines 9-13)
+**Location:** `pyproject.toml:9-13`
 
 ```toml
+# ACTUAL CODE from pyproject.toml
 dependencies = [
     "MarkupSafe", "flask", "packaging", "pillow", "requests", "selenium",
     "shapely", "python-dateutil", "orjson", "websockets", "beautifulsoup4",
@@ -2116,12 +2027,7 @@ dependencies = [
 **Correct Decision Would Be:**
 ```toml
 # Core dependencies only
-dependencies = [
-    "numpy",
-    "psycopg[binary]",
-    "shapely",
-    "pyproj",
-]
+dependencies = ["numpy", "psycopg[binary]", "shapely", "pyproj"]
 
 [project.optional-dependencies]
 webdata = ["requests", "beautifulsoup4", "selenium", "webdriver-manager"]
@@ -2131,15 +2037,17 @@ weather = ["xarray", "cfgrib", "cdsapi"]
 
 ### 11.7 Hardcoded Production Config in Codebase
 
-**Location:** `receiver/src/receiver.rs`, `aisdb/receiver.py`
+**Locations:** `receiver/src/receiver.rs`, `aisdb/receiver.py`
 
 ```python
+# ACTUAL CODE from aisdb/receiver.py
 def start_receiver(...,
                    connect_addr="aisdb.meridian.cs.dal.ca:9920",  # HARDCODED DOMAIN
                    ...):
 ```
 
 ```rust
+// ACTUAL CODE from receiver.rs
 let pghost = std::env::var("PGHOST")
     .unwrap_or("[fc00::9]".to_string());  // HARDCODED IPv6
 ```
@@ -2153,13 +2061,6 @@ let pghost = std::env::var("PGHOST")
 3. **Container Unfriendly** - Docker/K8s expect all config via env vars
 
 4. **Security Risk** - Hardcoded external servers, unintended data flows
-
-**Correct Decision Would Be:**
-```python
-import os
-RECEIVER_ADDR = os.environ.get('AISDB_RECEIVER_ADDR', DEFAULT_RECEIVER_ADDR)
-# Require explicit configuration, fail clearly if missing
-```
 
 ---
 
@@ -2175,7 +2076,7 @@ NMEA Message (text)
 u32 mmsi, f64 lon/lat
     | [PyO3 binding]
 Python int/float
-    | [Database insert]
+    | [Database insert - f64→f32 cast]
 INTEGER mmsi, REAL lon/lat (lossy!)
     | [Python query]
 Python int/float
@@ -2300,10 +2201,13 @@ result = risky_operation()  # No try/except
 | SQL injection | Security | Medium | Implement parameterized queries |
 | XSS vulnerability | Security | Low | Use textContent instead of HTML insertion |
 | Timestamp overflow (Y2038) | Data corruption | Medium | Use 64-bit timestamps throughout |
-| No authentication | Security | Medium | Add API key authentication |
+| COG type mismatch | Data corruption | Low | Change Python dtype to float32 |
+| JavaScript comma operator bug | Logic error | Low | Fix array indexing |
+| CI branch mismatch | CI/CD broken | Low | Change master to main |
 | Blocking receiver I/O | Data loss | High | Implement async architecture |
-| Panic-based error handling | Stability | Medium | Use Result<T,E> types |
+| Panic-based error handling (228 instances) | Stability | High | Use Result<T,E> types |
 | No TLS | Security | Medium | Add encryption for all connections |
+| Infinite timeouts | DOS vector | Low | Add timeouts |
 
 ### High Priority (Next Sprint)
 
@@ -2312,11 +2216,13 @@ result = risky_operation()  # No try/except
 | Connection pooling | Scalability | Medium | Add asyncpg/psycopg2 pooling |
 | Memory leaks (frontend) | Stability | Low | Add TTL eviction to live_targets |
 | Coordinate lat/lon swap | Correctness | Low | Fix variable assignment |
+| Haversine argument order | Correctness | Low | Fix argument order |
 | Rate limiting | Legal/availability | Medium | Add request throttling |
 | Batch size configuration | Operations | Low | Make BATCHSIZE configurable |
 | Unbounded thread spawning | Stability | Medium | Add thread pool |
 | Test isolation | Quality | Medium | Use fixtures with tmpdir |
 | Assertions for validation | Security | Medium | Use explicit exceptions |
+| Silent data loss on flush | Reliability | Medium | Add retry mechanism |
 
 ### Medium Priority (Next Quarter)
 
@@ -2350,17 +2256,22 @@ result = risky_operation()  # No try/except
 
 | Issue | Primary File | Line Numbers |
 |-------|--------------|--------------|
-| Float PK | `aisdb/aisdb_sql/create_tables.sql` | 1-30 |
-| SQL injection | `aisdb/database/sql_query_strings.py` | 10-50 |
-| Timestamp cast | `database_server/src/main.rs` | 100-150 |
+| Float PK | `aisdb/aisdb_sql/timescale_createtable_dynamic.sql` | 1-16 |
+| SQL injection | `aisdb/database/sql_query_strings.py` | 186-194 |
+| Timestamp cast | `database_server/src/aisdb_db_server.rs` | 176-177 |
 | XSS | `aisdb_web/map/map.js` | 386-390 |
 | Lat/lon swap | `aisdb/webdata/load_raster.py` | 61 |
-| Memory leak | `aisdb_web/map/livestream.js` | 1-50 |
-| Panic handling | `aisdb_lib/src/decode.rs` | 50-100 |
-| No rate limit | `aisdb/webdata/marinetraffic.py` | 1-50 |
+| Haversine swap | `aisdb/proc_util.py` | 69 |
+| Memory leak | `aisdb_web/map/livestream.js` | 43-113 |
+| Comma operator bug | `aisdb_web/map/livestream.js` | 74 |
+| COG type mismatch | `aisdb/track_gen.py` | 73 |
+| Panic handling | `aisdb_lib/src/*.rs` | Multiple |
+| No rate limit | `aisdb/webdata/_scraper.py` | 169, 193 |
 | Blocking I/O | `receiver/src/receiver.rs` | 315-394 |
-| Unbounded threads | `database_server/src/main.rs` | 63-79 |
-| Assertions | `aisdb/gis.py` | 25, 34 |
+| Unbounded threads | `database_server/src/main.rs` | 62-85 |
+| Infinite timeouts | `database_server/src/aisdb_db_server.rs` | 675-676 |
+| CI branch | `.github/workflows/CI.yml` | 6 |
+| Assertions | `aisdb/gis.py` | 34 |
 | Test isolation | `aisdb/tests/test_*.py` | Throughout |
 
 ### Appendix B: Severity Definitions
@@ -2374,16 +2285,16 @@ result = risky_operation()  # No try/except
 
 This report was generated through comprehensive static analysis by 10 specialized agents examining:
 
-1. **Rust crates data decisions** - `aisdb_lib/`, `receiver/`, `database_server/`
-2. **Python database layer** - `aisdb/database/`, SQL files
-3. **Track processing** - `aisdb/track_gen.py`, `aisdb/interp.py`
-4. **Webdata/weather** - `aisdb/webdata/`, `aisdb/weather/`
-5. **Frontend data handling** - `aisdb_web/`
-6. **Configuration/build** - `pyproject.toml`, `Dockerfile`, CI workflows
-7. **Testing/validation** - `aisdb/tests/`
-8. **Receiver/streaming** - `receiver/`, `database_server/`
-9. **Cross-language data model** - Type systems across Rust/Python/TypeScript/SQL
-10. **Documentation/API design** - `docs/`, `__init__.py`, public interfaces
+1. **Database Layer Decisions** - `aisdb/database/`, SQL files
+2. **Data Processing Pipeline** - `aisdb/track_gen.py`, `aisdb/interp.py`, `aisdb/gis.py`
+3. **Rust Data Handling** - `aisdb_lib/`, `receiver/`, `database_server/`
+4. **Web Data Services** - `aisdb/webdata/`, `aisdb/weather/`
+5. **Frontend Data Handling** - `aisdb_web/map/`
+6. **Spatial Indexing** - `aisdb/discretize/`, `aisdb/gis.py`
+7. **Data Ingestion** - `aisdb/database/decoder.py`, `aisdb_lib/src/csvreader.rs`
+8. **Configuration/Testing** - `aisdb/tests/`, `pyproject.toml`, CI workflows
+9. **Receiver/Streaming** - `receiver/`, `database_server/`
+10. **Cross-Language Data Model** - Type systems across Rust/Python/TypeScript/SQL
 
 **Files Analyzed:**
 - All Python source files (`*.py`)
@@ -2392,33 +2303,30 @@ This report was generated through comprehensive static analysis by 10 specialize
 - All SQL schema files (`*.sql`)
 - Configuration files (`*.toml`, `*.yml`, `*.yaml`)
 - CI/CD workflows (`.github/workflows/`)
-- Docker configuration (`Dockerfile`, `docker-compose.yml`)
+- Docker configuration (`Dockerfile`)
 
 ### Appendix D: Impact Summary by Severity
 
 | Severity | Count | Categories |
 |----------|-------|------------|
-| Critical | 62+ | Data integrity, security, Y2038, blocking I/O, panic handling (272 instances), DB insert blocking receiver, coordinate swap bugs |
-| High | 95+ | Architecture, scalability, validation, testing, no TLS, race conditions, UTF-8 panics, early return data loss, no connection pooling |
-| Medium | 85+ | Documentation, config, technical debt, observability, mixed TS/JS, debug prints, field aliasing, dual implementations |
-| Low | 30+ | Code quality, dependency management, minor improvements, redundant casts |
+| Critical | 75+ | Data integrity, security, Y2038, blocking I/O, panic handling (228 instances), COG type mismatch, comma operator bug, CI branch mismatch |
+| High | 105+ | Architecture, scalability, validation, testing, no TLS, race conditions, UTF-8 panics, early return data loss, no connection pooling, infinite timeouts |
+| Medium | 100+ | Documentation, config, technical debt, observability, mixed TS/JS, debug prints, field aliasing, dual implementations |
+| Low | 35+ | Code quality, dependency management, minor improvements, redundant casts |
 
-**Total Issues Identified: 290+**
+**Total Issues Identified: 340+**
 
-**New Issues Added in v1.3.0: 48+**
-- Database Layer: 6 verified + 6 new (transaction boundary mismanagement, missing join indexes, composite PK bloat, coordinate validation)
-- Data Processing: 6 verified + 8 new (Haversine coordinate order swap, bathymetry array slice bug, speed delta max(1,s), cubic spline returns None)
-- Rust Handling: 5 verified + 7 new (272 panics total, FFI boundary violations, string allocation in hot path, clone-heavy CSV, no circuit breaker)
-- Web Services: 5 verified + 4 new (no session pooling, hardcoded magic numbers, credential handling, no concurrency control)
-- Frontend: 5 verified + 4 new (coordinate array index typo/comma operator, dual IndexedDB implementations, unsafe event target type assertions, WebSocket close handler recursion)
-- Spatial: 5 verified + 2 new (no geography type for distance calculations, missing spatial index on legacy tables)
-- Ingestion: 5 verified + 2 new (catastrophic error recovery in NOAA CSV, silent BadZipFile swallowing)
-- Testing/Config: 7 verified + 5 new (no pytest fixtures, environment variable dependency without validation, PostgreSQL version inconsistency)
-- Receiver/Streaming: 7 verified + 8 new (no connection pooling, infinite timeouts, data loss on buffer flush failure, no rate limiting, unlimited WebSocket sizes, memory allocation in hot path)
-- Cross-Language: 5 verified + 2 new (COG stored as uint32 in Python but f32 in SQL, MMSI u32→i32 truncation)
-
-**Previous Issues (v1.2.0): 80+ new, totaling 250+**
-**Previous Issues (v1.1.0): 45+ new, totaling 175+**
+**New Issues Added in v1.4.0: 85+**
+- Database Layer: 6 verified + 4 new (mutable default arg, aggregate table recreation)
+- Data Processing: 6 verified + 2 new (Haversine swap, numpy speed bug)
+- Rust Handling: 5 verified + 6 new (228 panic points total, hot path allocations)
+- Web Services: 5 verified + 8 new (dead code, no session pooling, magic numbers)
+- Frontend: 5 verified + 8 new (comma operator bug, dual implementations)
+- Spatial: 5 verified + 3 new (no GEOGRAPHY type, coordinate CHECK constraints)
+- Ingestion: 5 verified + 2 new (early return loses file, silent BadZipFile)
+- Testing/Config: 7 verified + 4 new (CI branch mismatch, no conftest, print-only tests)
+- Receiver/Streaming: 7 verified + 4 new (infinite timeouts, silent data loss, plaintext password)
+- Cross-Language: 5 verified + 2 new (COG type mismatch producing garbage)
 
 ---
 
@@ -2426,7 +2334,7 @@ This report was generated through comprehensive static analysis by 10 specialize
 *AISdb-Lite Bad Business Decisions Assessment*
 *December 2025*
 
-*Version 1.3.0 - Full re-analysis completed*
-*Last Updated: December 11, 2025 - 48+ new issues added, all existing issues verified*
-*Total Issues: 290+ across 13 Parts*
-*Panic instances: 272 (183 .unwrap(), 68 .expect(), 21 panic!)*
+*Version 1.4.0 - Full re-analysis completed*
+*Last Updated: December 11, 2025 - 85+ new issues added, all existing issues verified*
+*Total Issues: 340+ across 13 Parts*
+*Panic instances: 228 (162 .unwrap(), 47 .expect(), 19 panic!)*

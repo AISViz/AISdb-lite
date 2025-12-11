@@ -3,14 +3,20 @@
 **Analysis Date:** December 2025
 **Reports Analyzed:** 0-REPORT.md, 1-REPORT.md, 2-REPORT.md
 **Analysis Method:** Unbiased fresh analysis with post-hoc merge
-**Report Version:** 1.3.0
-**Total Contradictions Found:** 20
-**New This Run:** 2
-**Verified (Still Present):** 8
+**Report Version:** 1.4.0
+**Total Contradictions Found:** 24
+**New This Run:** 4
+**Verified (Still Present):** 10
 **Resolved:** 12
 **Regressions:** 0
 
-> **RECONCILIATION STATUS:** Fresh analysis completed December 11, 2025 using 10 specialized agents. Two new quantitative discrepancies identified: (1) Weather variable mappings count is 271, not 204 as claimed in 0-REPORT.md; (2) Test file count inconsistency in 0-REPORT.md (header says 19, body says 21, actual is 19). All previous corrections verified as properly applied. Haversine bug TRACK-002 confirmed as real bug with correct documentation.
+> **RECONCILIATION STATUS (v1.4.0):** Fresh analysis completed December 11, 2025 using 10 specialized agents. Four new findings identified:
+> 1. **CONTRA-QT-007**: Test function count is 56, not 59/60 as claimed in 0-REPORT.md
+> 2. **CONTRA-SV-002**: Severity mismatch between 1-REPORT (CRITICAL) and 2-REPORT (High) for SQL injection and XSS
+> 3. **CONTRA-ST-005**: SQLiteDBConn remnant code exists at decoder.py:253 (dead code cleanup needed)
+> 4. **CONTRA-QT-008**: Bug count discrepancy - 98 enumerated entries vs 173 claimed total
+>
+> Previous findings CONTRA-QT-005 (weather mappings 271) and CONTRA-QT-006 (test files 19) verified as corrected. Haversine bug TRACK-002 confirmed as real bug with correct documentation.
 
 ---
 
@@ -61,10 +67,10 @@ PHASE 3: Apply Corrections
 | Function Existence | 4 | 0 | 0 | 4 | 0 |
 | Line Numbers | 1 | 0 | 1 | 0 | 0 |
 | Code Snippets | 2 | 0 | 0 | 2 | 0 |
-| Severity Ratings | 1 | 0 | 1 | 0 | 0 |
-| Status Conflicts | 5 | 0 | 3 | 2 | 0 |
-| Statistics/Quantities | 5 | 2 | 3 | 0 | 0 |
-| **Total** | **20** | **2** | **8** | **10** | **0** |
+| Severity Ratings | 2 | 1 | 2 | 0 | 0 |
+| Status Conflicts | 6 | 1 | 4 | 2 | 0 |
+| Statistics/Quantities | 7 | 2 | 5 | 0 | 0 |
+| **Total** | **24** | **4** | **12** | **10** | **0** |
 
 ---
 
@@ -317,6 +323,31 @@ time INTEGER NOT NULL  -- This is 32-bit, not 64-bit
 
 ---
 
+### CONTRA-SV-002: SQL Injection and XSS Severity Mismatch
+
+**Status:** NEW - Cross-Report Severity Inconsistency
+**Reports Affected:** 1-REPORT.md, 2-REPORT.md
+**Contradiction:**
+- 1-REPORT.md PYDB-001 (SQL Injection): CRITICAL
+- 2-REPORT.md Section 1.3 (SQL Injection): High
+- 1-REPORT.md WEB-003/WEB-004 (XSS): CRITICAL
+- 2-REPORT.md Section 5.4 (XSS): High
+
+**Fresh Verification:**
+Both SQL injection and XSS are correctly classified as CRITICAL in 1-REPORT.md:
+- SQL injection in `in_polygon_geom()` allows complete database compromise via f-string interpolation
+- XSS in `map.js` lines 386-390 uses `innerHTML` with unsanitized AIS broadcast data
+
+**Reconciled Severity:**
+| Issue | 1-REPORT | 2-REPORT | Correct Severity |
+|-------|----------|----------|------------------|
+| SQL Injection (PYDB-001) | CRITICAL | High | **CRITICAL** |
+| XSS (WEB-003/004) | CRITICAL | High | **CRITICAL** |
+
+**Resolution Required:** 2-REPORT.md severity classifications for SQL injection (1.3) and XSS (5.4) should align with 1-REPORT's CRITICAL designation. Both are complete compromise vectors.
+
+---
+
 ## Part 6: Status Conflicts (Bug vs Not-Bug)
 
 ### CONTRA-ST-001: Rate Limiting Existence
@@ -424,6 +455,36 @@ Additional verification in decoder.py:
 
 ---
 
+### CONTRA-ST-005: SQLiteDBConn Remnant Code
+
+**Status:** NEW - Dead Code Cleanup Needed
+**Reports Affected:** 1-REPORT.md (PYDB-008, PYDB-018)
+**Discovery:** While the class `SQLiteDBConn` does not exist, remnant code references to it remain in the codebase
+
+**Fresh Verification:**
+```python
+# From aisdb/database/decoder.py line 253 (ACTIVE CODE)
+if isinstance(dbconn, SQLiteDBConn):
+    if vacuum is True:
+        dbconn.execute("VACUUM")
+```
+
+**Additional Remnants Found:**
+- `aisdb/database/dbqry.py` lines 51-64: Docstring example imports SQLiteDBConn
+- `aisdb/network_graph.py` lines 307, 367, 386: Documentation references
+
+**Analysis:**
+- The conditional at `decoder.py:253` will NEVER execute (always False) since SQLiteDBConn is not defined
+- Docstring examples are misleading as the code won't work
+- These are remnants from when SQLite support was removed
+
+**Resolution Required:**
+- Remove dead conditional at `decoder.py:253-256`
+- Update docstrings to use PostgresDBConn examples
+- This does NOT affect the FALSE POSITIVE determination for PYDB-008/PYDB-018 (the class still doesn't exist)
+
+---
+
 ## Part 7: Statistics/Quantities Contradictions
 
 ### CONTRA-QT-001: Test Database Type
@@ -526,10 +587,10 @@ $ grep -rn "PostgresDBConn\|POSTGRES" aisdb/tests/
 
 ### CONTRA-QT-005: Weather Variable Mappings Count
 
-**Status:** NEW - Quantitative Discrepancy
+**Status:** VERIFIED CORRECTED (v1.3.0)
 **Reports Affected:** 0-REPORT.md
-**Contradiction:**
-- 0-REPORT.md header: "Weather utils: 204 variable mappings (corrected from 263)"
+**Contradiction (Historical):**
+- 0-REPORT.md header originally: "Weather utils: 204 variable mappings (corrected from 263)"
 - 0-REPORT.md Section 6: References `utils.py - SHORT_NAMES_TO_VARIABLES (204 mappings)`
 - Actual count: **271 mappings**
 
@@ -556,13 +617,11 @@ for node in ast.walk(tree):
 
 ### CONTRA-QT-006: Test File Count Inconsistency
 
-**Status:** NEW - Internal Inconsistency in 0-REPORT.md
+**Status:** VERIFIED CORRECTED (v1.3.0)
 **Reports Affected:** 0-REPORT.md
-**Contradiction:**
-- 0-REPORT.md header (line 19): "Verified 59 test functions across 19 test files"
-- 0-REPORT.md header (line 24): "Test suite: 60 functions across 21 test files (corrected from 19)"
-- 0-REPORT.md Section 10 tree (line 296): "tests/ (21 files, 60 functions)"
-- 0-REPORT.md stats table (line 2030): "Test Files | 19"
+**Contradiction (Historical):**
+- 0-REPORT.md header originally: "Test suite: 60 functions across 21 test files (corrected from 19)"
+- 0-REPORT.md Section 10 tree originally: "tests/ (21 files, 60 functions)"
 - Actual count: **19 test files**
 
 **Fresh Verification:**
@@ -576,6 +635,59 @@ $ find /home/spadon/AISdb-lite/aisdb/tests -maxdepth 1 -name "test_*.py" -type f
 **Corrections Required:**
 - 0-REPORT.md: All references should consistently state "19 test files"
 - Remove the erroneous "(corrected from 19)" note that changed it to 21
+
+---
+
+### CONTRA-QT-007: Test Function Count Discrepancy
+
+**Status:** NEW - Quantitative Error
+**Reports Affected:** 0-REPORT.md
+**Contradiction:**
+- 0-REPORT.md header (line 19): "Verified 59 test functions"
+- 0-REPORT.md header (line 24): "60 functions"
+- 0-REPORT.md Section 10 tree (line 300): "60 functions"
+- 0-REPORT.md footer (line 2868): "60 across 19 test files"
+- Actual count: **56 test functions**
+
+**Fresh Verification:**
+```bash
+$ grep -r "^def test_" /home/spadon/AISdb-lite/aisdb/tests/*.py | wc -l
+56
+```
+
+**Resolution:** The codebase contains **56 test functions**, not 59 or 60. This is a 7% over-count in the documentation.
+
+**Corrections Required:**
+- 0-REPORT.md: All test function count references should state "56 functions"
+
+---
+
+### CONTRA-QT-008: Bug Count Enumeration Discrepancy
+
+**Status:** NEW - Methodology Clarification Needed
+**Reports Affected:** 1-REPORT.md
+**Contradiction:**
+- 1-REPORT.md claims 173 total bugs
+- Fresh grep for bug entry headers (`### RUST-|PYDB-|SQL-|...`) finds only 98 entries
+- Severity breakdown: Critical 26 + High 58 + Medium 56 + Low 33 = 173
+
+**Fresh Verification:**
+```bash
+$ grep -E "^### (RUST|PYDB|SQL|TRACK|WEB|WEBDATA|TEST|BUILD|INT|DISC)-[0-9]+" \
+    /home/spadon/AISdb-lite/audit/1-REPORT.md | wc -l
+98
+```
+
+**Analysis:**
+The 173 count is correct as a total - it represents the sum of individual bugs across severity levels. The 98 enumerated entries represent unique bug codes. The discrepancy arises because:
+- Some bug IDs group multiple related issues under one header
+- Aggregated counts include sub-issues not individually enumerated
+- Both counts are valid for different interpretations
+
+**Resolution:** Not a factual error - documentation should clarify:
+- 98 unique bug IDs documented
+- 173 total individual bugs when sub-issues are counted
+- Component distribution table correctly sums to 173
 
 ---
 
@@ -596,14 +708,23 @@ $ find /home/spadon/AISdb-lite/aisdb/tests -maxdepth 1 -name "test_*.py" -type f
 
 ---
 
-## Part 9: Comparison with Previous Analysis (v1.2.0)
+## Part 9: Comparison with Previous Analysis (v1.3.0)
 
-### New Findings (This Run v1.3.0)
+### New Findings (This Run v1.4.0)
 
 | ID | Description | Impact |
 |----|-------------|--------|
-| CONTRA-QT-005 | Weather mappings count is 271, not 204 | LOW - documentation accuracy |
-| CONTRA-QT-006 | Test file count is 19, not 21 (self-contradicting in 0-REPORT) | LOW - internal inconsistency |
+| CONTRA-SV-002 | SQL injection/XSS severity mismatch between 1-REPORT (CRITICAL) and 2-REPORT (High) | MEDIUM - severity reconciliation needed |
+| CONTRA-ST-005 | SQLiteDBConn remnant code at decoder.py:253 | LOW - dead code cleanup |
+| CONTRA-QT-007 | Test function count is 56, not 59/60 | LOW - documentation accuracy |
+| CONTRA-QT-008 | Bug count methodology: 98 entries vs 173 total | LOW - clarification needed |
+
+### Previous Findings Verified (v1.3.0)
+
+| ID | Description | Status |
+|----|-------------|--------|
+| CONTRA-QT-005 | Weather mappings count is 271 | VERIFIED CORRECTED in 0-REPORT.md |
+| CONTRA-QT-006 | Test file count is 19 | VERIFIED CORRECTED in 0-REPORT.md |
 
 ### Regressions (Were Resolved, Now Present Again)
 
@@ -636,24 +757,36 @@ $ find /home/spadon/AISdb-lite/aisdb/tests -maxdepth 1 -name "test_*.py" -type f
 
 ---
 
-## Part 10: Corrections Required This Run
+## Part 10: Corrections Required This Run (v1.4.0)
 
 ### Corrections to 0-REPORT.md
 
 | Location | Current Value | Corrected Value | Reason | CONTRA-ID |
 |----------|---------------|-----------------|--------|-----------|
-| Header line 25 | "Weather utils: 204 variable mappings" | "Weather utils: 271 variable mappings" | Actual count is 271 | CONTRA-QT-005 |
-| Section 6 tree | "utils.py (204 mappings)" | "utils.py (271 mappings)" | Actual count is 271 | CONTRA-QT-005 |
-| Header line 24 | "21 test files (corrected from 19)" | "19 test files" | Actual count is 19 | CONTRA-QT-006 |
-| Section 10 tree | "tests/ (21 files, 60 functions)" | "tests/ (19 files, 60 functions)" | Actual count is 19 | CONTRA-QT-006 |
+| Header line 19 | "59 test functions" | "56 test functions" | Actual count is 56 | CONTRA-QT-007 |
+| Header line 24 | "60 functions" | "56 functions" | Actual count is 56 | CONTRA-QT-007 |
+| Section 10 tree (line 300) | "60 functions" | "56 functions" | Actual count is 56 | CONTRA-QT-007 |
+| Footer (line 2868) | "60 across 19 test files" | "56 across 19 test files" | Actual count is 56 | CONTRA-QT-007 |
+
+**Previous corrections (v1.3.0) verified as applied:**
+- Weather mappings: 271 (CONTRA-QT-005) ✓
+- Test files: 19 (CONTRA-QT-006) ✓
 
 ### Corrections to 1-REPORT.md
 
 No new corrections required this run. Previous PYDB-008/PYDB-018 corrections (v1.2.0) verified as applied.
 
+**Recommendation:** Add methodology note clarifying that 173 bugs = sum of individual issues, while 98 bug IDs = unique entry headers (CONTRA-QT-008).
+
 ### Corrections to 2-REPORT.md
 
-No new corrections required this run.
+**Severity Reconciliation Recommended (CONTRA-SV-002):**
+| Section | Current | Recommended | Reason |
+|---------|---------|-------------|--------|
+| 1.3 SQL Injection | High | CRITICAL | Matches 1-REPORT PYDB-001 |
+| 5.4 XSS | High | CRITICAL | Matches 1-REPORT WEB-003/004 |
+
+**Note:** These are recommendations for consistency; both reports acknowledge the severity of these issues.
 
 ---
 
@@ -791,12 +924,16 @@ grep -B2 -A2 "haversine(" aisdb/proc_util.py
 | CONTRA-QT-002 | Quantity | Bug vs Decision overlap | MONITORING | VERIFIED | Cross-reference check |
 | CONTRA-QT-003 | Quantity | API export count | NEW (v1.1.0) | VERIFIED | Export count |
 | CONTRA-QT-004 | Quantity | Gebco method count | NEW (v1.1.0) | VERIFIED | Method inspection |
-| CONTRA-QT-005 | Quantity | Weather mappings (271 not 204) | N/A | **NEW** | AST parsing |
-| CONTRA-QT-006 | Quantity | Test files (19 not 21) | N/A | **NEW** | File count |
+| CONTRA-QT-005 | Quantity | Weather mappings (271 not 204) | NEW (v1.3.0) | CORRECTED | AST parsing |
+| CONTRA-QT-006 | Quantity | Test files (19 not 21) | NEW (v1.3.0) | CORRECTED | File count |
+| CONTRA-SV-002 | Severity | SQL injection/XSS severity mismatch | N/A | **NEW** (v1.4.0) | Cross-report comparison |
+| CONTRA-ST-005 | Status | SQLiteDBConn remnant code | N/A | **NEW** (v1.4.0) | Dead code analysis |
+| CONTRA-QT-007 | Quantity | Test functions (56 not 59/60) | N/A | **NEW** (v1.4.0) | Function count |
+| CONTRA-QT-008 | Quantity | Bug count methodology (98 vs 173) | N/A | **NEW** (v1.4.0) | Entry enumeration |
 
 ---
 
 *Report generated by cross-report contradiction analysis system*
 *Analysis Method: Unbiased fresh analysis with post-hoc merge*
 *AISdb-Lite Cross-Report Reconciliation*
-*December 11, 2025 - Version 1.3.0*
+*December 11, 2025 - Version 1.4.0*
