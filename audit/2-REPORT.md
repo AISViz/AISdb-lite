@@ -3,14 +3,22 @@
 
 **Project:** AISdb-Lite v1.8.0-alpha
 **Analysis Date:** December 2025
-**Report Version:** 1.1.0
+**Report Version:** 1.2.0
 **Scope:** Architectural decisions, data handling patterns, storage strategies, and systemic design flaws
 
-> **UPDATE NOTE (December 2025 - v1.1.0)**: Comprehensive re-verification completed using 10 specialized exploration agents.
-> - All 65+ existing issues (Parts 1-12) verified as still present in actual source code
-> - 45+ NEW issues discovered across all categories
-> - Total issues now 175+ (up from 130+)
-> - Key new findings: asymmetric checksum handling, InlandDenoising data loss, unchecked CSV column access
+> **UPDATE NOTE (December 2025 - v1.2.0)**: Full re-analysis completed using 10 specialized exploration agents.
+> - All existing issues (Parts 1-12) re-verified against current source code
+> - 80+ NEW issues discovered across all categories
+> - Total issues now **250+** (up from 175+ in v1.1.0)
+> - Key new findings include:
+>   - **Receiver**: Blocking I/O causes silent UDP packet loss during DB writes (NEW-RECV-003)
+>   - **Rust**: 180+ panic instances across codebase (3.1 expanded)
+>   - **Ingestion**: Early return on single invalid timestamp loses entire file remainder (NEW-INGEST-002)
+>   - **Spatial**: Coordinate validation bug (np.all returns bool, not array) (6.4 confirmed)
+>   - **CI/CD**: Pipeline targets wrong branch (master vs main) (NEW-CI-001)
+>   - **Frontend**: 10 new issues including memory leaks, XSS, and busy-wait patterns
+>
+> **Previous UPDATE NOTE (v1.1.0)**: Comprehensive re-verification completed.
 >
 > **Previous CORRECTION NOTE (v1.0.1)**: Corrections applied based on cross-report contradiction analysis:
 > - Hypothetical code examples now clearly marked as illustrative
@@ -41,16 +49,16 @@ The analysis was conducted by 10 specialized agents examining:
 
 | Category | Severity | Count | Impact |
 |----------|----------|-------|--------|
-| **Data Integrity** | Critical | 42+ | Silent data corruption, precision loss, Y2038 bug, asymmetric validation |
-| **Architecture** | Critical | 35+ | Fundamental design flaws, blocking I/O, no backpressure, race conditions |
-| **Security** | High | 22+ | SQL injection, XSS, credential exposure, no TLS, plaintext connections |
-| **Scalability** | High | 25+ | Memory exhaustion, N+1 queries, unbounded threads, temp dir races |
-| **Correctness** | High | 20+ | Mathematical errors, type inconsistencies, logic flaws, coordinate swaps |
-| **Maintainability** | Medium | 28+ | Technical debt, inconsistent patterns, no versioning, mixed JS/TS |
-| **Testing** | High | 22+ | No isolation, assertions for validation, 99% integration tests, silent errors |
-| **Documentation** | Medium | 15+ | Missing API contracts, fragmented docs, no deprecation, debug prints |
+| **Data Integrity** | Critical | 55+ | Silent data corruption, precision loss, Y2038 bug, NULL→0 defaults, timestamp truncation |
+| **Architecture** | Critical | 50+ | Blocking I/O, no backpressure, race conditions, synchronous DB in receiver loop |
+| **Security** | High | 28+ | SQL injection, XSS, credential exposure, no TLS, UTF-8 validation panics |
+| **Scalability** | High | 35+ | Memory exhaustion, N+1 queries, unbounded threads, temp dir races, no pooling |
+| **Correctness** | High | 30+ | Mathematical errors, type inconsistencies, coordinate swaps, brute-force O(n*m) |
+| **Maintainability** | Medium | 35+ | Technical debt, inconsistent patterns, no versioning, field name aliasing |
+| **Testing** | High | 30+ | No isolation, assertions for validation, 81-89% integration tests, CI wrong branch |
+| **Documentation** | Medium | 18+ | Missing API contracts, fragmented docs, no deprecation, debug prints |
 
-**Total Issues: 175+ (up from 130+ in v1.0.0)**
+**Total Issues: 250+ (up from 175+ in v1.1.0)**
 
 ---
 
@@ -2381,21 +2389,24 @@ This report was generated through comprehensive static analysis by 10 specialize
 
 | Severity | Count | Categories |
 |----------|-------|------------|
-| Critical | 42+ | Data integrity, security, Y2038, blocking I/O, panic handling, asymmetric validation |
-| High | 58+ | Architecture, scalability, validation, testing, no TLS, race conditions, CSV panics |
-| Medium | 45+ | Documentation, config, technical debt, observability, mixed TS/JS, debug prints |
-| Low | 20+ | Code quality, dependency management, minor improvements, redundant Selenium calls |
+| Critical | 55+ | Data integrity, security, Y2038, blocking I/O, panic handling, DB insert blocking receiver |
+| High | 80+ | Architecture, scalability, validation, testing, no TLS, race conditions, UTF-8 panics, early return data loss |
+| Medium | 70+ | Documentation, config, technical debt, observability, mixed TS/JS, debug prints, field aliasing |
+| Low | 25+ | Code quality, dependency management, minor improvements, redundant casts |
 
-**Total Issues Identified: 175+**
+**Total Issues Identified: 250+**
 
-**New Issues Added in v1.1.0: 45+**
-- Database Layer: 5 new (FK constraints, transaction scope, indexes, geom overhead, schema drift)
-- Data Processing: 5 new (MMSI segmentation, dtype inference, InlandDenoising, pickle, pathways)
-- Rust Handling: 7 new (CSV columns, deque access, coordinates, track keys, numerics, compression)
-- Web Services: 7 new (Selenium, prints, context manager, file cleanup, sizes, exceptions, permissions)
-- Frontend: 7 new (close handler, window pollution, async race, socket readiness, listeners, busy-wait, TS)
-- Spatial: 3 new (float PK precision, R-tree, multi-resolution)
-- Ingestion: 4 new (checksum asymmetry, timestamp truncation, error recovery, temp races)
+**New Issues Added in v1.2.0: 80+**
+- Database Layer: 5 verified + 5 new (FK constraints, transaction scope, indexes, geom overhead, schema drift)
+- Data Processing: 6 verified + 7 new (MMSI segmentation, dtype inference, InlandDenoising, pickle, parameter order bug)
+- Rust Handling: 5 verified + 10 new (180+ panics, CSV columns, deque access, coordinates, track keys, numerics, empty DB panic)
+- Web Services: 5 verified + 10 new (Selenium, prints, context manager, file cleanup, sizes, temp dir not cleaned, no resume)
+- Frontend: 5 verified + 10 new (close handler, window pollution, async race, socket readiness, listeners, busy-wait, transaction scope)
+- Spatial: 5 verified + 9 new (float PK precision, R-tree, multi-resolution, brute-force denoising, CRS assumptions)
+- Ingestion: 5 verified + 6 new (checksum asymmetry, early return timestamp, error recovery, temp races, CSV assert)
+- Testing/Config: 7 verified + 7 new (CI wrong branch, no conftest, missing import, test filtering, DB pooling, version mismatch)
+- Receiver/Streaming: 7 verified + 13 new (UTF-8 panic, DB blocking receiver, UDP loss, memory growth, no timeout, JSON fail)
+- Cross-Language: 5 verified + 10 new (NULL→0 defaults, field aliasing, validation gaps, ETA encoding, type mismatches)
 
 ---
 
@@ -2403,5 +2414,6 @@ This report was generated through comprehensive static analysis by 10 specialize
 *AISdb-Lite Bad Business Decisions Assessment*
 *December 2025*
 
-*Version 1.1.0 - Comprehensive re-verification completed*
-*Last Updated: December 2025 - 45+ new issues added, all existing issues verified*
+*Version 1.2.0 - Full re-analysis completed*
+*Last Updated: December 2025 - 80+ new issues added, all existing issues verified*
+*Total Issues: 250+ across 13 Parts*

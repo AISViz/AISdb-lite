@@ -4,6 +4,83 @@ This file tracks all changes made to `4-REPORT.md` across successive engineering
 
 ---
 
+## [Run 2025-12-11 18:45] - Report Version 4.0.0
+
+### Summary
+Major update implementing Prompt Version 1.2.0 requirements: Added comprehensive PostGIS and TimescaleDB data architecture guidance with detailed ASCII diagrams for spatial data organization, data lifecycle management, spatial-temporal query execution, and storage architecture.
+
+### Changes
+
+#### [ADDED] Section 10: PostGIS Spatial Data Architecture
+- **10.1 Geometry vs Geography Decision**: Analysis of GEOMETRY vs GEOGRAPHY types with recommendation for GEOGRAPHY for global AIS data accuracy
+- **10.2 Spatial Column Design**: Generated column (STORED) patterns for spatial data
+- **10.3 Spatial Index Strategy**: GiST, SP-GiST, BRIN index selection matrix with ASCII diagram
+- **10.4 Query Pattern Optimization**: Bounding box, radius search, trajectory construction templates
+- **10.5 PostGIS + TimescaleDB Integration**: Chunk-local spatial indexing explanation with ASCII diagram
+
+#### [ADDED] Section 11: TimescaleDB Advanced Configuration
+- **11.1 Chunk Interval Selection**: Analysis table with 7-day chunk recommendation for AIS data
+- **11.2 Compression Configuration**: `segmentby=mmsi`, `orderby=time DESC` with justification
+- **11.3 Continuous Aggregates**: Hourly and daily summary views with refresh policies
+- **11.4 Tiered Storage with Tablespaces**: Data lifecycle diagram (Hot→Warm→Cold→Frozen) with automated tiering procedure
+
+#### [ADDED] Section 12: Combined PostGIS + TimescaleDB Optimization
+- **12.1 Spatial-Temporal Query Execution**: TIME→SPACE filtering strategy with ASCII diagram
+- **12.2 Combined Index Strategy**: Separate vs composite GiST index approaches
+- **12.3 Query Pattern Templates**: Regional time-range, vessel track with geometry, nearest neighbor search
+- **12.4 Anti-Patterns to Avoid**: Common mistakes and correct approaches table
+- **12.5 EXPLAIN ANALYZE Verification**: Query plan validation guidance
+
+#### [ADDED] Section 13: Storage Planning and Capacity Management
+- **13.1 Storage Calculation Model**: Detailed byte-level breakdown ASCII diagram (~185 bytes/row with indexes)
+- **13.2 Capacity Planning Tables**: Scale-based storage requirements (Small to Global)
+- **13.3 Storage Array Allocation**: /fast-array and /slow-array architecture diagram
+- **13.4 Monitoring and Alerting**: Chunk health, compression effectiveness, tablespace usage queries
+- **13.5 Backup and Recovery**: Weekly backup script, WAL archiving, PITR configuration
+
+#### [UPDATED] Section 20.3: Architectural Improvements
+- Added spatial data type improvement (GEOMETRY → GEOGRAPHY)
+- Added spatial-temporal query optimization (TIME→SPACE chunk exclusion)
+- Added storage architecture tier information
+
+#### [UPDATED] Conclusion
+- Added innovations 10-12: PostGIS Integration, TimescaleDB Optimization, Self-Hosted Infrastructure
+- Updated storage efficiency metric to 60-90% compression
+
+#### [UPDATED] Document Metadata
+- Updated version to 4.0.0
+- Added version history table
+- Added PostGIS Spatial and TimescaleDB Advanced analysis agents
+
+### Statistics
+- Sections Added: 4 major sections (10, 11, 12, 13)
+- Subsections Added: 18
+- ASCII Diagrams Added: 5 (Spatial Index Hierarchy, TimescaleDB Chunk Indexing, Data Lifecycle, Query Execution, Storage Architecture)
+- SQL Code Examples Added: 25+
+- Tables Added: 8
+- Lines Added: ~800
+- Total Report Size: ~4,130 lines
+
+### Source Reports Used
+- 0-REPORT.md: Architecture documentation (referenced for current PostGIS usage)
+- 1-REPORT.md: Bug analysis (referenced for precision and Y2038 issues)
+- 2-REPORT.md: Bad decisions (referenced for storage and scaling concerns)
+
+### Git State
+- Branch: audit
+- Last Commit: 4eb41fa - docs(audit): Add PostGIS/TimescaleDB data architecture to 4-PROMPT
+
+### Prompt Version Compliance
+This run implements **Prompt Version 1.2.0** requirements:
+- ✓ Agent 4.5: PostGIS Spatial Data Architecture
+- ✓ Agent 4.6: TimescaleDB Advanced Configuration
+- ✓ Agent 4.7: Combined PostGIS + TimescaleDB Optimization
+- ✓ Agent 4.8: Storage Planning and Capacity Management
+- ✓ Self-hosted infrastructure philosophy (no cloud services)
+- ✓ ASCII diagrams for all major architectural concepts
+
+---
+
 ## [Run 2025-12-11 Initial] - Report Version 3.1.0
 
 ### Summary
@@ -176,6 +253,7 @@ Brief description of this analysis run.
 | 2025-12-11 | 3.2.0 | Verification analysis, roadmap validation | +500 |
 | 2025-12-11 | - | **PROMPT UPDATE**: Added self-hosted infrastructure philosophy | 4-PROMPT.md |
 | 2025-12-11 | - | **PROMPT UPDATE**: Added PostGIS/TimescaleDB data architecture | 4-PROMPT.md |
+| 2025-12-11 | 4.0.0 | PostGIS + TimescaleDB sections, storage planning, ASCII diagrams | +800 |
 
 ---
 

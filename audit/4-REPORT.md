@@ -1990,6 +1990,806 @@ reserve_pool_size = 5          # Extra connections for burst
 
 ---
 
+## 10. PostGIS Spatial Data Architecture
+
+### 10.1 Geometry vs Geography Decision
+
+PostGIS provides two spatial types with different characteristics:
+
+| Type | Coordinate System | Math | Performance | Accuracy |
+|------|------------------|------|-------------|----------|
+| **GEOMETRY** | Planar (projected) | Euclidean | Faster | Inaccurate at global scale |
+| **GEOGRAPHY** | Spheroidal (WGS84) | Geodesic | Slower (~10-20x) | Accurate globally |
+
+**Decision for AIS Data: Use GEOGRAPHY**
+
+Justification:
+1. **Global coverage** — AIS data spans all oceans; planar math produces significant errors at scale
+2. **Geodesic accuracy** — Distance calculations using ST_Distance on GEOGRAPHY use the spheroid
+3. **Maritime distances** — Vessel tracking requires correct great-circle distances, not planar approximations
+4. **Consistency** — GEOGRAPHY ensures ST_DWithin and ST_Distance return meters, not degrees
+
+**Trade-off mitigation:**
+- GEOGRAPHY is slower, but AIS queries are primarily filtered by TIME first (via TimescaleDB chunk exclusion)
+- Spatial filter runs on small result set after time filtering, minimizing GEOGRAPHY overhead
+
+### 10.2 Spatial Column Design
+
+**Recommended: Generated Column (STORED)**
+
+```sql
+-- In ais_global_dynamic table definition:
+geom GEOMETRY(POINT, 4326)
+     GENERATED ALWAYS AS (
+         ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
+     ) STORED
+
+-- Alternative: GEOGRAPHY for geodesic accuracy
+geog GEOGRAPHY(POINT, 4326)
+     GENERATED ALWAYS AS (
+         ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography
+     ) STORED
+```
+
+**Why Generated Columns:**
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| Generated STORED | Auto-maintained, indexed, fast queries | Storage overhead (~32 bytes/row) |
+| Generated VIRTUAL | No storage overhead | Cannot be indexed in PostgreSQL |
+| Functional index | No storage in table | Computed at query time, complex syntax |
+
+**Recommendation:** Use `GENERATED ALWAYS AS ... STORED` for the primary spatial column. Storage overhead (~32 bytes) is minimal compared to query performance benefits.
+
+### 10.3 Spatial Index Strategy
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        SPATIAL INDEX HIERARCHY                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  QUERY TYPE                    INDEX TYPE          USE CASE                  │
+│  ══════════════════════════════════════════════════════════════════════════ │
+│                                                                              │
+│  Bounding box queries          GiST (default)      Most AIS queries         │
+│  WHERE geom && envelope        ───────────────▶    Viewport selection       │
+│                                                                              │
+│  Point-in-polygon              GiST (default)      Zone containment         │
+│  WHERE ST_Within(geom, poly)   ───────────────▶    Port areas               │
+│                                                                              │
+│  Nearest neighbor              GiST (required)     Distance-based ranking   │
+│  ORDER BY geom <-> point       ───────────────▶    Find closest vessels     │
+│                                                                              │
+│  Dense point data              SP-GiST             When points uniformly    │
+│  (alternative)                 ───────────────▶    distributed              │
+│                                                                              │
+│  Time-ordered spatial          BRIN (rare)         Spatially clustered      │
+│  (not recommended for AIS)     ───────────────▶    arrival patterns         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Index Creation:**
+
+```sql
+-- Primary spatial index (GiST on GEOMETRY)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ais_dynamic_geom
+ON ais_global_dynamic USING GIST (geom);
+
+-- For GEOGRAPHY column (if used)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ais_dynamic_geog
+ON ais_global_dynamic USING GIST (geog);
+
+-- Combined time-space index (requires btree_gist extension)
+-- Only if spatial-temporal queries are common
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ais_dynamic_time_geom
+ON ais_global_dynamic USING GIST (geom, time);
+```
+
+### 10.4 Query Pattern Optimization
+
+**Pattern 1: Bounding Box Query (Most Common)**
+
+```sql
+-- GOOD: Uses && operator (bounding box overlap)
+SELECT mmsi, time, longitude, latitude, sog, cog
+FROM ais_global_dynamic
+WHERE time > EXTRACT(EPOCH FROM NOW() - INTERVAL '1 day')
+  AND geom && ST_MakeEnvelope(-74.5, 40.0, -73.5, 41.0, 4326);
+
+-- AVOID: ST_Within for simple bounding boxes (slower)
+-- WHERE ST_Within(geom, ST_MakeEnvelope(...))
+```
+
+**Pattern 2: Radius Search**
+
+```sql
+-- Using GEOGRAPHY for accurate distance in meters
+SELECT mmsi, time, longitude, latitude
+FROM ais_global_dynamic
+WHERE time > EXTRACT(EPOCH FROM NOW() - INTERVAL '1 hour')
+  AND ST_DWithin(
+      geog,
+      ST_SetSRID(ST_MakePoint(-74.0, 40.7), 4326)::geography,
+      50000  -- 50km radius in meters
+  );
+```
+
+**Pattern 3: Trajectory Construction**
+
+```sql
+-- Build vessel trajectory as LineString
+SELECT
+    mmsi,
+    ST_MakeLine(geom ORDER BY time) AS trajectory,
+    ST_Length(ST_MakeLine(geom ORDER BY time)::geography) AS distance_m
+FROM ais_global_dynamic
+WHERE mmsi = 123456789
+  AND time BETWEEN 1704067200 AND 1704153600
+GROUP BY mmsi;
+```
+
+### 10.5 PostGIS + TimescaleDB Integration
+
+TimescaleDB automatically partitions data by time. Spatial indexes are created per-chunk:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   TIMESCALEDB CHUNK SPATIAL INDEXING                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Hypertable: ais_global_dynamic                                             │
+│  ════════════════════════════════                                           │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ Chunk: _hyper_1_1_chunk (Day 1)                                        │  │
+│  │   └── Local GiST index: _hyper_1_1_chunk_geom_idx                     │  │
+│  │                                                                        │  │
+│  │ Chunk: _hyper_1_2_chunk (Day 2)                                        │  │
+│  │   └── Local GiST index: _hyper_1_2_chunk_geom_idx                     │  │
+│  │                                                                        │  │
+│  │ Chunk: _hyper_1_3_chunk (Day 3)                                        │  │
+│  │   └── Local GiST index: _hyper_1_3_chunk_geom_idx                     │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  QUERY EXECUTION:                                                           │
+│  1. TimescaleDB excludes chunks outside time range                          │
+│  2. PostGIS GiST indexes scan remaining chunks                              │
+│  3. Result: Only relevant chunks + relevant spatial data                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key insight:** Always filter by TIME first, then by SPACE. TimescaleDB chunk exclusion is the primary optimization; spatial indexing handles the reduced result set.
+
+---
+
+## 11. TimescaleDB Advanced Configuration
+
+### 11.1 Chunk Interval Selection
+
+The chunk interval determines how TimescaleDB partitions data by time. Optimal selection depends on:
+
+| Factor | Small Chunks (6-12h) | Medium Chunks (1-7 days) | Large Chunks (14-30 days) |
+|--------|---------------------|-------------------------|---------------------------|
+| Insert rate | >100M rows/day | 1-100M rows/day | <1M rows/day |
+| Query granularity | Minute-level | Hour-level | Day-level |
+| Compression delay | Hours | Days | Weeks |
+| Chunk count (1 year) | 730-1460 | 52-365 | 12-26 |
+| Memory per chunk | ~50MB | ~200MB-1GB | ~2-10GB |
+
+**Recommendation for AIS Data: 7-day chunks**
+
+Justification:
+1. **Shipping patterns** — Maritime traffic has weekly cyclicity (weekday vs weekend patterns)
+2. **Query patterns** — Most track queries span 1-7 days for vessel tracking
+3. **Compression sweet spot** — 7-day chunks compress well with mmsi segmentby
+4. **Manageable chunk count** — 52 chunks/year is maintainable
+
+```sql
+-- Create hypertable with 7-day chunk interval
+SELECT create_hypertable(
+    'ais_global_dynamic',
+    'time',
+    chunk_time_interval => 604800,  -- 7 days in seconds
+    partitioning_column => 'mmsi',
+    number_partitions => 256,
+    if_not_exists => TRUE
+);
+```
+
+### 11.2 Compression Configuration
+
+TimescaleDB native compression provides 60-90% storage reduction for AIS data:
+
+```sql
+-- Enable compression with optimal settings
+ALTER TABLE ais_global_dynamic SET (
+    timescaledb.compress = true,
+    timescaledb.compress_segmentby = 'mmsi',      -- Group by vessel
+    timescaledb.compress_orderby = 'time DESC'    -- Recent data first
+);
+
+-- Add automatic compression policy
+SELECT add_compression_policy(
+    'ais_global_dynamic',
+    compress_after => INTERVAL '7 days',
+    if_not_exists => TRUE
+);
+```
+
+**Why `segmentby = 'mmsi'`:**
+- All position reports for a vessel are stored together
+- Vessel-specific queries decompress only relevant segments
+- Delta encoding on time column achieves high compression (consecutive timestamps)
+
+**Why `orderby = 'time DESC'`:**
+- Recent data accessed first (common query pattern)
+- Better cache locality for time-range scans
+
+### 11.3 Continuous Aggregates
+
+Pre-computed aggregates for analytics queries:
+
+```sql
+-- Hourly vessel position summary
+CREATE MATERIALIZED VIEW ais_hourly_summary
+WITH (timescaledb.continuous) AS
+SELECT
+    time_bucket('1 hour', to_timestamp(time)) AS bucket,
+    mmsi,
+    COUNT(*) AS message_count,
+    AVG(sog) AS avg_sog,
+    MAX(sog) AS max_sog,
+    AVG(cog) AS avg_cog,
+    MIN(longitude) AS min_lon,
+    MAX(longitude) AS max_lon,
+    MIN(latitude) AS min_lat,
+    MAX(latitude) AS max_lat,
+    -- Centroid of all positions in the hour
+    ST_Centroid(ST_Collect(geom)) AS centroid
+FROM ais_global_dynamic
+GROUP BY bucket, mmsi
+WITH NO DATA;
+
+-- Automatic refresh policy
+SELECT add_continuous_aggregate_policy(
+    'ais_hourly_summary',
+    start_offset => INTERVAL '3 hours',
+    end_offset => INTERVAL '1 hour',
+    schedule_interval => INTERVAL '1 hour',
+    if_not_exists => TRUE
+);
+
+-- Daily vessel coverage summary
+CREATE MATERIALIZED VIEW ais_daily_summary
+WITH (timescaledb.continuous) AS
+SELECT
+    time_bucket('1 day', to_timestamp(time)) AS bucket,
+    mmsi,
+    COUNT(*) AS message_count,
+    AVG(sog) AS avg_sog,
+    MAX(sog) AS max_sog,
+    COUNT(DISTINCT source) AS source_count,
+    -- Convex hull of all positions (vessel operating area)
+    ST_ConvexHull(ST_Collect(geom)) AS coverage_area
+FROM ais_global_dynamic
+GROUP BY bucket, mmsi
+WITH NO DATA;
+
+SELECT add_continuous_aggregate_policy(
+    'ais_daily_summary',
+    start_offset => INTERVAL '2 days',
+    end_offset => INTERVAL '1 day',
+    schedule_interval => INTERVAL '1 day',
+    if_not_exists => TRUE
+);
+```
+
+### 11.4 Tiered Storage with Tablespaces
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     TIMESCALEDB DATA LIFECYCLE                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  TIME ──────────────────────────────────────────────────────────────────►   │
+│                                                                              │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │   INGEST    │    │     HOT     │    │    WARM     │    │    COLD     │  │
+│  │   (now)     │───►│  (0-7 days) │───►│ (7-30 days) │───►│  (30+ days) │  │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+│                                                                              │
+│  Storage:           /fast-array        /fast-array        /slow-array       │
+│  Format:            Uncompressed       TimescaleDB        TimescaleDB       │
+│  Compression:       None               Native (~10:1)     Native (~10:1)    │
+│  Indexes:           All                All                BRIN only         │
+│  Query Speed:       <10ms              <50ms              <500ms            │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    CONTINUOUS AGGREGATES                             │    │
+│  │  ┌─────────┐     ┌─────────┐     ┌─────────┐                        │    │
+│  │  │ Hourly  │     │  Daily  │     │ Weekly  │                        │    │
+│  │  │ (real-  │     │ (batch) │     │ (batch) │                        │    │
+│  │  │  time)  │     │         │     │         │                        │    │
+│  │  └─────────┘     └─────────┘     └─────────┘                        │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  FROZEN TIER (180+ days): Export to Parquet on /slow-array                  │
+│  Query via: DuckDB (analytical), re-import if needed (operational)          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Tablespace Setup:**
+
+```sql
+-- Create tablespaces on different storage arrays
+-- (Requires superuser; run as postgres user)
+CREATE TABLESPACE fast_storage LOCATION '/fast-array/pg-data-18/ts_fast';
+CREATE TABLESPACE slow_storage LOCATION '/slow-array/pg-archive/ts_slow';
+
+-- Attach tablespaces to hypertable
+SELECT attach_tablespace('fast_storage', 'ais_global_dynamic');
+SELECT attach_tablespace('slow_storage', 'ais_global_dynamic');
+
+-- Set default tablespace for new chunks
+ALTER TABLE ais_global_dynamic SET (
+    timescaledb.tablespace = 'fast_storage'
+);
+```
+
+**Automated Tiering Procedure:**
+
+```sql
+-- Automated data lifecycle management
+CREATE OR REPLACE PROCEDURE ais_data_lifecycle_management()
+LANGUAGE plpgsql AS $$
+DECLARE
+    moved_chunks INT := 0;
+    chunk_rec RECORD;
+BEGIN
+    -- 1. Move chunks older than 30 days to slow storage
+    FOR chunk_rec IN
+        SELECT chunk_schema || '.' || chunk_name AS full_name
+        FROM timescaledb_information.chunks
+        WHERE hypertable_name = 'ais_global_dynamic'
+          AND range_end < NOW() - INTERVAL '30 days'
+          AND data_nodes IS NULL  -- Not on slow storage yet
+    LOOP
+        PERFORM move_chunk(
+            chunk => chunk_rec.full_name,
+            destination_tablespace => 'slow_storage',
+            index_destination_tablespace => 'slow_storage'
+        );
+        moved_chunks := moved_chunks + 1;
+    END LOOP;
+
+    -- 2. Refresh continuous aggregates
+    CALL refresh_continuous_aggregate('ais_hourly_summary',
+        NOW() - INTERVAL '2 days', NOW());
+    CALL refresh_continuous_aggregate('ais_daily_summary',
+        NOW() - INTERVAL '3 days', NOW());
+
+    -- 3. Update statistics on recent chunks
+    ANALYZE ais_global_dynamic;
+
+    RAISE NOTICE 'Data lifecycle: moved % chunks to slow storage', moved_chunks;
+END;
+$$;
+
+-- Schedule via pg_cron (if installed) or external cron
+-- Run daily at 3 AM
+-- SELECT cron.schedule('ais-lifecycle', '0 3 * * *',
+--     'CALL ais_data_lifecycle_management()');
+```
+
+---
+
+## 12. Combined PostGIS + TimescaleDB Optimization
+
+### 12.1 Spatial-Temporal Query Execution
+
+AIS queries are inherently spatial-temporal: "Show vessels in region X during time period Y"
+
+**Critical Rule: Filter TIME before SPACE**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SPATIAL-TEMPORAL QUERY EXECUTION                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  QUERY: "Vessels near NYC port in last hour"                                │
+│  ═══════════════════════════════════════════                                │
+│                                                                              │
+│  Step 1: TIME FILTER (TimescaleDB chunk exclusion)                          │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │  Hypertable: ais_global_dynamic (52 chunks/year)                   │     │
+│  │                                                                     │     │
+│  │  WHERE time > EXTRACT(EPOCH FROM NOW() - INTERVAL '1 hour')        │     │
+│  │  ════════════════════════════════════════════════════════════      │     │
+│  │                                                                     │     │
+│  │  Chunks excluded: 51                                               │     │
+│  │  Chunks remaining: 1 (current chunk)                               │     │
+│  │                                                                     │     │
+│  │  Cost: O(1) metadata lookup                                        │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                          │                                                   │
+│                          ▼                                                   │
+│  Step 2: SPATIAL FILTER (PostGIS GiST index)                                │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │  On remaining 1 chunk only (~1M rows → ~10K candidates):           │     │
+│  │                                                                     │     │
+│  │  AND ST_DWithin(geog, NYC_point, 50000)                            │     │
+│  │  ═══════════════════════════════════════                           │     │
+│  │                                                                     │     │
+│  │  GiST index scan → 500 candidate rows                              │     │
+│  │  Distance verification → 127 matching rows                         │     │
+│  │                                                                     │     │
+│  │  Cost: O(log n) + O(k) verification                                │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                          │                                                   │
+│                          ▼                                                   │
+│  Step 3: RESULT                                                             │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │  127 rows returned                                                 │     │
+│  │  Execution time: ~12ms                                             │     │
+│  │                                                                     │     │
+│  │  Without time filter first: ~45 seconds (full table scan)          │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 12.2 Combined Index Strategy
+
+```sql
+-- Strategy 1: Separate indexes (RECOMMENDED for flexibility)
+-- TimescaleDB automatically creates chunk-local indexes
+
+-- B-tree for vessel + time (primary access pattern)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ais_dynamic_mmsi_time
+ON ais_global_dynamic (mmsi, time DESC);
+
+-- GiST for spatial queries
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ais_dynamic_geom
+ON ais_global_dynamic USING GIST (geom);
+
+-- Strategy 2: Composite GiST index (for very spatial-heavy workloads)
+-- Requires btree_gist extension
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ais_dynamic_time_geom_composite
+ON ais_global_dynamic USING GIST (time, geom);
+```
+
+### 12.3 Query Pattern Templates
+
+**Template 1: Regional Time-Range Query**
+
+```sql
+-- Find all vessels in North Atlantic during specific day
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT mmsi, time, longitude, latitude, sog, cog
+FROM ais_global_dynamic
+WHERE time BETWEEN 1704067200 AND 1704153600  -- TIME FIRST
+  AND geom && ST_MakeEnvelope(-80, 20, -40, 50, 4326)  -- THEN SPACE
+ORDER BY time DESC
+LIMIT 10000;
+```
+
+**Template 2: Single Vessel Track with Geometry**
+
+```sql
+-- Get vessel trajectory with distance calculation
+SELECT
+    mmsi,
+    array_agg(time ORDER BY time) AS times,
+    ST_MakeLine(geom ORDER BY time) AS trajectory,
+    ST_Length(ST_MakeLine(geom ORDER BY time)::geography) AS total_distance_m,
+    AVG(sog) AS avg_speed_knots
+FROM ais_global_dynamic
+WHERE mmsi = 123456789
+  AND time BETWEEN 1704067200 AND 1704153600
+GROUP BY mmsi;
+```
+
+**Template 3: Nearest Vessel Search**
+
+```sql
+-- Find 10 nearest vessels to a point (uses KNN search)
+SELECT mmsi, time, longitude, latitude, sog,
+       ST_Distance(geog, ST_MakePoint(-74.0, 40.7)::geography) AS distance_m
+FROM ais_global_dynamic
+WHERE time > EXTRACT(EPOCH FROM NOW() - INTERVAL '1 hour')
+ORDER BY geom <-> ST_SetSRID(ST_MakePoint(-74.0, 40.7), 4326)
+LIMIT 10;
+```
+
+### 12.4 Anti-Patterns to Avoid
+
+| Anti-Pattern | Problem | Correct Approach |
+|--------------|---------|------------------|
+| `WHERE ST_DWithin(...) AND time > X` | Spatial evaluated before time | `WHERE time > X AND ST_DWithin(...)` |
+| `WHERE ST_Distance(...) < 50000` | Computes all distances | Use `ST_DWithin(geog, point, 50000)` |
+| `WHERE CAST(geom AS geography) ...` | Runtime cast, no index | Store geography column separately |
+| `WHERE ST_Within(geom, large_polygon)` | No index acceleration for large polys | Use `geom && polygon` first, then `ST_Within` |
+| No time filter on hypertable | Full table scan | Always include time predicate |
+
+### 12.5 EXPLAIN ANALYZE Verification
+
+For each new query pattern, verify execution:
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS, COSTS)
+SELECT *
+FROM ais_global_dynamic
+WHERE time > EXTRACT(EPOCH FROM NOW() - INTERVAL '1 day')
+  AND geom && ST_MakeEnvelope(-74.5, 40.0, -73.5, 41.0, 4326);
+```
+
+**Expected plan characteristics:**
+1. `Append` node with chunk exclusion (`Chunks excluded: N`)
+2. `Index Scan using idx_ais_dynamic_geom` (not Seq Scan)
+3. `Rows Removed by Filter` should be small relative to `Rows`
+4. `Buffers: shared hit` > `shared read` (good cache behavior)
+
+---
+
+## 13. Storage Planning and Capacity Management
+
+### 13.1 Storage Calculation Model
+
+**Per AIS Position Report (Uncompressed):**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    STORAGE CALCULATION: AIS POSITION REPORT                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  COLUMN                   TYPE                 SIZE (bytes)                  │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  mmsi                     INTEGER              4                             │
+│  time                     BIGINT               8                             │
+│  longitude                DOUBLE PRECISION     8                             │
+│  latitude                 DOUBLE PRECISION     8                             │
+│  rot                      REAL                 4                             │
+│  sog                      REAL                 4                             │
+│  cog                      REAL                 4                             │
+│  heading                  REAL                 4                             │
+│  maneuver                 SMALLINT             2                             │
+│  utc_second               SMALLINT             2                             │
+│  source                   TEXT (avg 10 chars)  10 + 1 (length byte)         │
+│  geom                     GEOMETRY(POINT)      32                            │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  Subtotal (columns):                           91 bytes                      │
+│                                                                              │
+│  OVERHEAD                                                                    │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  Tuple header (HeapTupleHeaderData):           23 bytes                      │
+│  NULL bitmap (if any):                         0-3 bytes                     │
+│  Alignment padding:                            ~5 bytes                      │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  Subtotal (overhead):                          ~28 bytes                     │
+│                                                                              │
+│  TOTAL PER ROW (Uncompressed):                 ~120 bytes                    │
+│                                                                              │
+│  INDEX OVERHEAD PER ROW                                                      │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  B-tree (mmsi, time):                          24 bytes                      │
+│  B-tree covering (mmsi, time) + INCLUDE:       40 bytes                      │
+│  GiST (geom):                                  40 bytes                      │
+│  BRIN (time):                                  ~0.1 bytes (amortized)        │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  Subtotal (indexes):                           ~65 bytes                     │
+│                                                                              │
+│  TOTAL PER ROW (with indexes):                 ~185 bytes                    │
+│                                                                              │
+│  COMPRESSION RATIOS                                                         │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  TimescaleDB native (segmentby mmsi):          ~10:1 → 18 bytes/row         │
+│  Parquet + ZSTD (frozen tier):                 ~50:1 → 3.7 bytes/row        │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 13.2 Capacity Planning Tables
+
+**Daily Message Volume by Scale:**
+
+| Scale | Daily Reports | Vessels | Reports/Vessel |
+|-------|--------------|---------|----------------|
+| Small (regional) | 1M | 5,000 | 200 |
+| Medium (national) | 10M | 20,000 | 500 |
+| Large (continental) | 100M | 100,000 | 1,000 |
+| Global (full AIS) | 1B | 500,000 | 2,000 |
+
+**Storage Requirements by Scale:**
+
+| Scale | Daily Raw | Daily Compressed | Annual Raw | Annual Compressed | Annual Parquet |
+|-------|-----------|-----------------|------------|-------------------|----------------|
+| Small | 185 MB | 18 MB | 67 GB | 6.7 GB | 1.3 GB |
+| Medium | 1.85 GB | 185 MB | 675 GB | 67 GB | 13 GB |
+| Large | 18.5 GB | 1.85 GB | 6.75 TB | 675 GB | 135 GB |
+| Global | 185 GB | 18.5 GB | 67.5 TB | 6.75 TB | 1.35 TB |
+
+### 13.3 Storage Array Allocation
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         STORAGE ARCHITECTURE                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────────────────────────┐                                    │
+│  │           /fast-array               │                                    │
+│  │         (NVMe RAID)                 │                                    │
+│  │         3+ GB/s sequential          │                                    │
+│  │         500K+ IOPS random           │                                    │
+│  ├─────────────────────────────────────┤                                    │
+│  │  pg-data-18/                        │                                    │
+│  │  ├── base/          (system)        │                                    │
+│  │  ├── ts_fast/       (hot tablespace)│◄── Active writes, uncompressed     │
+│  │  │   └── _hyper_*   (hot chunks)    │    Query latency: <10ms            │
+│  │  ├── pg_wal/        (WAL files)     │◄── Transaction log                 │
+│  │  └── pgsql_tmp/     (sort/hash)     │◄── Query temp space                │
+│  │                                     │                                    │
+│  │  Reserved Space:                    │                                    │
+│  │  ├── Hot data (0-7 days): 50 GB     │                                    │
+│  │  ├── Warm data (7-30 days): 100 GB  │  (compressed, still on fast)       │
+│  │  ├── WAL files: 10 GB               │                                    │
+│  │  └── Temp/sort: 50 GB               │                                    │
+│  │                                     │                                    │
+│  │  TOTAL RESERVED: 210 GB minimum     │                                    │
+│  └─────────────────────────────────────┘                                    │
+│                    │                                                         │
+│                    │ move_chunk() after 30 days                              │
+│                    ▼                                                         │
+│  ┌─────────────────────────────────────┐                                    │
+│  │           /slow-array               │                                    │
+│  │          (SATA RAID)                │                                    │
+│  │         500+ MB/s sequential        │                                    │
+│  │         10K IOPS random             │                                    │
+│  ├─────────────────────────────────────┤                                    │
+│  │  pg-archive/                        │                                    │
+│  │  └── ts_slow/       (cold tablespace)│◄── Historical queries             │
+│  │      └── _hyper_*   (cold chunks)   │    Query latency: <500ms           │
+│  │                                     │                                    │
+│  │  ais-archive/                       │                                    │
+│  │  └── parquet/       (frozen data)   │◄── Analytical queries (DuckDB)     │
+│  │      └── year=2024/month=01/*.parquet                                    │
+│  │                                     │                                    │
+│  │  pg-backups/                        │                                    │
+│  │  ├── base/          (weekly full)   │                                    │
+│  │  └── wal-archive/   (continuous)    │                                    │
+│  │                                     │                                    │
+│  │  Growth Estimate (Medium scale):    │                                    │
+│  │  ├── Cold PostgreSQL: 500 GB/year   │                                    │
+│  │  ├── Parquet archives: 50 GB/year   │                                    │
+│  │  └── Backups: 100 GB rotating       │                                    │
+│  │                                     │                                    │
+│  │  TOTAL: ~650 GB/year growth         │                                    │
+│  └─────────────────────────────────────┘                                    │
+│                                                                              │
+│  BACKUP STRATEGY                                                            │
+│  ═══════════════                                                            │
+│  • Weekly: pg_basebackup to /slow-array/pg-backups/base/                    │
+│  • Continuous: WAL archiving to /slow-array/pg-backups/wal-archive/         │
+│  • Retention: 4 weekly backups, 14 days WAL                                 │
+│  • Recovery: PITR to any point in last 14 days                              │
+│  • Cold backup: rsync Parquet to offline storage monthly                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 13.4 Monitoring and Alerting
+
+**Chunk Health Monitoring:**
+
+```sql
+-- Check chunk sizes and compression status
+SELECT
+    chunk_schema || '.' || chunk_name AS chunk,
+    pg_size_pretty(total_bytes) AS total_size,
+    pg_size_pretty(table_bytes) AS table_size,
+    pg_size_pretty(index_bytes) AS index_size,
+    is_compressed,
+    range_start,
+    range_end
+FROM timescaledb_information.chunks c
+JOIN _timescaledb_internal.compressed_chunk_stats s
+  ON c.chunk_name = s.chunk_name
+WHERE hypertable_name = 'ais_global_dynamic'
+ORDER BY range_start DESC
+LIMIT 20;
+
+-- Compression effectiveness
+SELECT
+    hypertable_name,
+    total_chunks,
+    number_compressed_chunks,
+    pg_size_pretty(before_compression_total_bytes) AS before,
+    pg_size_pretty(after_compression_total_bytes) AS after,
+    ROUND(100.0 - (after_compression_total_bytes::float /
+                   NULLIF(before_compression_total_bytes::float, 0) * 100), 1) AS compression_pct
+FROM hypertable_compression_stats('ais_global_dynamic');
+
+-- Tablespace usage
+SELECT
+    spcname AS tablespace,
+    pg_size_pretty(pg_tablespace_size(spcname)) AS size
+FROM pg_tablespace
+WHERE spcname IN ('fast_storage', 'slow_storage', 'pg_default');
+
+-- Disk space alerts (integrate with monitoring system)
+SELECT
+    CASE
+        WHEN pg_tablespace_size('fast_storage') > 200 * 1024^3
+        THEN 'CRITICAL: fast_storage > 200GB'
+        WHEN pg_tablespace_size('fast_storage') > 150 * 1024^3
+        THEN 'WARNING: fast_storage > 150GB'
+        ELSE 'OK'
+    END AS fast_storage_status,
+    pg_size_pretty(pg_tablespace_size('fast_storage')) AS current_size;
+```
+
+### 13.5 Backup and Recovery
+
+**PostgreSQL Backup Configuration:**
+
+```bash
+#!/bin/bash
+# /slow-array/pg-backups/scripts/weekly_backup.sh
+
+BACKUP_DIR="/slow-array/pg-backups/base"
+WAL_ARCHIVE="/slow-array/pg-backups/wal-archive"
+DATE=$(date +%Y%m%d)
+RETENTION_WEEKS=4
+
+# Create base backup
+pg_basebackup \
+    -h localhost \
+    -U postgres \
+    -D "${BACKUP_DIR}/backup_${DATE}" \
+    -Ft \           # Tar format
+    -z \            # Gzip compression
+    -P \            # Progress
+    --wal-method=fetch
+
+# Cleanup old backups (keep 4 weeks)
+find "${BACKUP_DIR}" -name "backup_*" -type d -mtime +$((RETENTION_WEEKS * 7)) -exec rm -rf {} \;
+
+# Verify backup integrity
+pg_verifybackup "${BACKUP_DIR}/backup_${DATE}"
+
+echo "Backup completed: ${BACKUP_DIR}/backup_${DATE}"
+```
+
+**WAL Archiving Configuration (postgresql.conf):**
+
+```ini
+# Archive mode for PITR
+archive_mode = on
+archive_command = 'test ! -f /slow-array/pg-backups/wal-archive/%f && cp %p /slow-array/pg-backups/wal-archive/%f'
+archive_timeout = 300  # Archive every 5 minutes if no activity
+
+# WAL retention
+wal_keep_size = 2GB
+```
+
+**Point-In-Time Recovery:**
+
+```bash
+# Restore to specific timestamp
+pg_restore \
+    --target-time="2025-01-15 14:30:00" \
+    --target-action=promote \
+    -d aisdb \
+    /slow-array/pg-backups/base/backup_20250115
+```
+
+---
+
 # PART IV: STATE-OF-THE-ART ALGORITHMS
 
 This section specifies algorithms by name with complexity analysis and references. **Critical principle:** Prefer battle-tested libraries over custom implementations to reduce bugs and maintenance burden.
@@ -3276,6 +4076,9 @@ Execute deletions in this order to avoid dependency errors:
 | Outlier detection | None | Isolation Forest + LOF |
 | Track segmentation | Rule-based thresholds | ST-DBSCAN (unsupervised) |
 | Data lifecycle | Unbounded growth | Hot/Warm/Cold/Frozen tiers |
+| Spatial data type | GEOMETRY (planar) | GEOGRAPHY (geodesic) |
+| Spatial-temporal queries | Sequential filters | TIME→SPACE chunk exclusion |
+| Storage architecture | Single tier | Tiered /fast-array → /slow-array |
 
 ---
 
@@ -3291,11 +4094,14 @@ This engineering blueprint provides a comprehensive, actionable plan for transfo
 6. **Single-Machine Focus** — All tuning optimized for fixed-host deployment
 7. **Streaming Architecture** — LMAX Disruptor pattern with bounded channel backpressure
 8. **Crash Recovery** — Event sourcing with WAL replay for durability
-9. **Tiered Storage** — Hot/Warm/Cold/Frozen data lifecycle with 81% cost reduction
+9. **Tiered Storage** — Hot/Warm/Cold/Frozen data lifecycle on local storage arrays
+10. **PostGIS Integration** — GEOGRAPHY type for geodesic accuracy, spatial-temporal query optimization
+11. **TimescaleDB Optimization** — 7-day chunks, compression policies, continuous aggregates
+12. **Self-Hosted Infrastructure** — All storage and processing on local /fast-array and /slow-array
 
 **Total Implementation Effort:** 10-12 weeks (expanded for streaming + recovery)
 **Expected ROI:** 7-100x performance improvement across all operations
-**Storage Cost Reduction:** $2,329/year per 100M reports (81% savings)
+**Storage Efficiency:** 60-90% compression with TimescaleDB native compression
 
 ### Quick Reference: Critical Bugs to Fix First
 
@@ -3318,7 +4124,15 @@ This engineering blueprint provides a comprehensive, actionable plan for transfo
 ---
 
 *Document prepared through multi-agent deep analysis with source code verification*
-*Analysis Agents: Ingestion Pipeline, Database Schema, Track Processing, Code Deletion*
+*Analysis Agents: Ingestion Pipeline, Database Schema, Track Processing, Code Deletion, PostGIS Spatial, TimescaleDB Advanced*
 *Target: AISdb-Lite v2.0.0*
-*Date: December 10, 2025*
-*Total Report Length: ~3,300 lines (v3.1.0)*
+*Date: December 11, 2025*
+*Report Version: 4.0.0*
+*Total Report Length: ~4,130 lines*
+
+### Report Version History
+| Version | Date | Changes |
+|---------|------|---------|
+| 4.0.0 | 2025-12-11 | Added PostGIS Spatial Data Architecture (Section 10), TimescaleDB Advanced Configuration (Section 11), Combined PostGIS+TimescaleDB Optimization (Section 12), Storage Planning and Capacity Management (Section 13) |
+| 3.2.0 | 2025-12-11 | Added streaming architecture, verification scripts, implementation roadmap enhancements |
+| 3.1.0 | 2025-12-10 | Initial comprehensive engineering blueprint |

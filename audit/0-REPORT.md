@@ -13,6 +13,11 @@
 > - ReceiverArgs struct field names corrected
 > - PostgresDBConn method list corrected
 > - ALL tests are PostgreSQL-only (no SQLite tests exist)
+>
+> **UPDATE (2025-12-11 Verification Run)**: Re-verified all findings with 8 specialized agents:
+> - Added 4 new bugs (#12-15) including CRITICAL SQL injection vulnerability
+> - Verified 59 test functions across 19 test files
+> - Confirmed all previous corrections remain valid
 
 ---
 
@@ -2399,15 +2404,62 @@ struct DaterangeResponse { /* time range response */ }
     - `toml` module imported but NOT listed in `pyproject.toml` dependencies
     - **Impact**: `ImportError` at runtime if toml not installed
 
+12. **encoder_score_fcn Timestamp Type Mismatch (src/lib.rs:373-401)**
+    - **Bug**: Documentation says `t1` and `t2` parameters are `float` (epoch seconds)
+    - **Actual**: Implementation uses `i32` for timestamp parameters
+    - **Location**: `/home/spadon/AISdb-lite/src/lib.rs:394-401`
+    ```rust
+    pub fn encoder_score_fcn(
+        x1: f64, y1: f64,
+        t1: i32,  // <-- Documented as float, implemented as i32
+        x2: f64, y2: f64,
+        t2: i32,  // <-- Documented as float, implemented as i32
+        ...
+    )
+    ```
+    - **Impact**: Potential precision loss for epoch timestamps, API documentation mismatch
+
+13. **Domain.boundary Field Documented But Not Implemented (aisdb/gis.py:300-412)**
+    - **Bug**: Domain class documentation (lines 300-307) lists `self.boundary` as an attribute
+    - **Actual**: Field is never initialized in `__init__` method (lines 402-432)
+    - **Impact**: AttributeError if code attempts to access `domain.boundary`
+
+14. **SQL Injection Vulnerability in polygon_wkt (aisdb/database/sql_query_strings.py:192-193)**
+    - **CRITICAL**: `polygon_wkt` parameter directly interpolated into SQL without escaping
+    ```python
+    def in_polygon_geom(*, alias, polygon_wkt, srid=4326, **_):
+        return (
+            f"""{alias}.geom && ST_GeomFromText('{polygon_wkt}', {srid}) AND """
+            f"""ST_Intersects({alias}.geom, ST_GeomFromText('{polygon_wkt}', {srid}))"""
+        )
+    ```
+    - **Impact**: Attackers can inject arbitrary SQL via malicious WKT strings
+    - **Fix**: Use parameterized queries with psycopg.sql module
+
+15. **Receiver Hardcoded Domain (aisdb/receiver.py:7)**
+    - **Bug**: Connection address hardcoded to `aisdb.meridian.cs.dal.ca:9920`
+    - **Impact**: Not configurable for different deployment environments
+    - **Fix**: Use environment variable or configurable parameter
+
 ### 12.5 Security Concerns
+
+**CRITICAL: SQL Injection in polygon_wkt (Bug #14):**
+- `aisdb/database/sql_query_strings.py:192-193`: Direct f-string interpolation of WKT parameter
+- **Risk Level**: CRITICAL - User-supplied WKT strings can inject arbitrary SQL
+- **Mitigation Required**: Replace with parameterized queries
 
 **SQL String Interpolation (12+ instances):**
 - `aisdb/database/dbconn.py:110`: Table name interpolation in f-string
 - `aisdb/database/dbconn.py:228-246`: Multiple f-string SQL queries
-- `aisdb/database/sql_query_strings.py`: Multiple f-string SQL functions
+- `aisdb/database/sql_query_strings.py`: Multiple f-string SQL functions (lines 38-40, 47-48, 66-68, 101-102, 117, 132-133, 147-148, 184)
 - `aisdb_lib/src/db.rs:83-117`: `.replace("{}", mstr)` for table names
 
-**Risk Assessment**: Low-medium risk since table names are typically controlled, but best practices recommend using `psycopg.sql.SQL` and `psycopg.sql.Identifier` for all dynamic SQL.
+**Risk Assessment**: Low-medium risk for table name interpolation (names are typically controlled), but **CRITICAL** for polygon_wkt parameter which may accept user input. Best practices recommend using `psycopg.sql.SQL` and `psycopg.sql.Identifier` for all dynamic SQL.
+
+**Unwrap/Panic Operations (50+ instances):**
+- `receiver/src/receiver.rs`: 45+ `.unwrap()` calls that can crash on unexpected input
+- `aisdb_lib/src/db.rs`: Multiple unwrap calls on SQL file access and database operations
+- **Risk**: Application crashes in production when assumptions aren't met
 
 ### 12.6 Missing Test Coverage
 

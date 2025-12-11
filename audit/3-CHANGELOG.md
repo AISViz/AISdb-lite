@@ -4,6 +4,54 @@ This file tracks all changes made to `3-REPORT.md` across successive cross-repor
 
 ---
 
+## [Run 2025-12-11 Fresh Analysis v2] - Report Version 1.2.0
+
+### Summary
+Executed fresh unbiased analysis using 10 specialized agents. Verified all existing findings and discovered one new false positive (CONTRA-ST-004: SQLiteDBConn references).
+
+### Analysis Method
+- Fresh analysis completed: Yes
+- Existing 3-REPORT.md found: Yes (v1.1.0)
+- Merge performed: Yes
+- Analysis agents executed: 10
+
+### New Contradictions Found
+- [ADDITION] CONTRA-ST-004: SQLiteDBConn doesn't exist anywhere in the codebase. PYDB-008 and PYDB-018 reference non-existent code and should be marked FALSE POSITIVE.
+
+### Contradictions Verified (Still Present/Resolved)
+- [VERIFIED] CONTRA-LN-001: XSS vulnerability location (map.js lines 386-390) - still accurate
+- [VERIFIED] CONTRA-SV-001: Y2038 severity consistency - both reports say CRITICAL
+- [VERIFIED] CONTRA-QT-002: Bug vs Decision count overlap - intentional, cross-references accurate
+- [VERIFIED] CONTRA-QT-003: API export count discrepancy - documented
+- [VERIFIED] CONTRA-QT-004: Gebco method count - documented
+- [VERIFIED] CONTRA-ST-002: Haversine coordinate swap - bug correctly documented in 1-REPORT
+
+### Regressions Detected
+None - previous CONTRA-ST-002 regression has been corrected in source report
+
+### Corrections Applied to Source Reports
+
+#### 1-REPORT.md
+- [CORRECTED] PYDB-008: Marked as FALSE POSITIVE (SQLiteDBConn doesn't exist)
+- [CORRECTED] PYDB-018 (SQLiteDBConn entry): Marked as FALSE POSITIVE
+- [CORRECTED] Header correction note: Added PYDB-008 and PYDB-018
+- [CORRECTED] Executive summary note: Added PYDB-008 and PYDB-018 false positive mention
+
+### Statistics
+- Total Contradictions: 18
+- New This Run: 1 (CONTRA-ST-004)
+- Verified: 7
+- Resolved: 10
+- Regressions: 0
+- Reports Modified: 1-REPORT.md
+
+### Git State
+- Branch: audit
+- Last Commit: (current uncommitted changes)
+- Uncommitted Changes: Yes (audit reports)
+
+---
+
 ## [Run 2025-12-11 Fresh Analysis] - Report Version 1.1.0
 
 ### Summary
