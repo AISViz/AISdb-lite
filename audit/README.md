@@ -85,11 +85,11 @@ The easiest way to run a complete audit is using the automated runner:
 
 ### Cron Job Setup
 
-To run audits automatically every 3 hours:
+To run audits automatically every 2 hours:
 
 ```bash
 # Add to crontab (crontab -e)
-0 */3 * * * /home/spadon/AISdb-lite/audit/run_audit.sh > /dev/null 2>&1
+0 */2 * * * /home/spadon/AISdb-lite/audit/run_audit.sh > /dev/null 2>&1
 ```
 
 Note: Detailed logs are saved to `audit/logs/` by the script itself.
