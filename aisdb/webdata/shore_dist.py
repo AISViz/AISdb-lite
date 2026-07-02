@@ -23,6 +23,7 @@ you specified. This setup enables the module to directly access and utilize thes
 distance calculations. This documentation and the accompanying module aim to facilitate easy and
 efficient access to marine geographical data for research and operational purposes.
 """
+
 import os
 import zipfile
 
@@ -45,50 +46,61 @@ def download_unzip(data_url, data_dir, bytesize=0, timeout=(10, 30)):
     assert os.path.isdir(data_dir), f"Not a directory: data_dir={data_dir}"
     filename = os.path.basename(data_url)
     zip_file = os.path.join(data_dir, filename)
-    # Initialize a session for connection pooling
-    session = requests.Session()
 
-    # Check if the file exists and has the correct size
-    if os.path.isfile(zip_file) and (bytesize == 0 or os.path.getsize(zip_file) == bytesize):
-        # File already exists, skipping silently.
-        return
+    # Download only when the archive is absent or has the wrong size; a
+    # pre-seeded archive must still fall through to the extraction step.
+    already_downloaded = os.path.isfile(zip_file) and (
+        bytesize == 0 or os.path.getsize(zip_file) == bytesize
+    )
 
-    try:
-        # Perform a HEAD request to check for file metadata.
-        with session.head(data_url, timeout=timeout) as response:
-            assert response.status_code == 200, "Error fetching file metadata"
-            if 'Content-Length' in response.headers:
-                content_length = int(response.headers['Content-Length'])
-                # Update bytesize if it wasn't provided or differs.
-                if bytesize != content_length:
-                    bytesize = content_length
-    except requests.RequestException as e:
-        print(f"Request failed: {e}")
-        return
+    if not already_downloaded:
+        # Initialize a session for connection pooling
+        session = requests.Session()
+        try:
+            # Perform a HEAD request to check for file metadata.
+            with session.head(
+                data_url, timeout=timeout, allow_redirects=True
+            ) as response:
+                assert response.status_code == 200, "Error fetching file metadata"
+                if "Content-Length" in response.headers:
+                    content_length = int(response.headers["Content-Length"])
+                    # Update bytesize if it wasn't provided or differs.
+                    if bytesize != content_length:
+                        bytesize = content_length
+        except requests.RequestException as e:
+            print(f"Request failed: {e}")
+            return
 
-    try:
-        with session.get(data_url, stream=True, timeout=timeout) as payload:
-            payload.raise_for_status()  # Will raise an HTTPError for bad responses.
-            with open(zip_file, 'wb') as f, tqdm(total=bytesize, desc=filename, unit="B", unit_scale=True) as t:
-                for chunk in payload.iter_content(chunk_size=8192):
-                    if chunk:  # filter out keep-alive new chunks
-                        t.update(f.write(chunk))
-    except requests.RequestException as err:
-        os.remove(zip_file)
-        print(f"Download failed: {err}")
+        try:
+            with session.get(data_url, stream=True, timeout=timeout) as payload:
+                payload.raise_for_status()  # Will raise an HTTPError for bad responses.
+                with open(zip_file, "wb") as f, tqdm(
+                    total=bytesize, desc=filename, unit="B", unit_scale=True
+                ) as t:
+                    for chunk in payload.iter_content(chunk_size=8192):
+                        if chunk:  # filter out keep-alive new chunks
+                            t.update(f.write(chunk))
+        except requests.RequestException as err:
+            os.remove(zip_file)
+            print(f"Download failed: {err}")
+            return
 
-    if zip_file.endswith('.zip'):
-        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+    if zip_file.endswith(".zip"):
+        with zipfile.ZipFile(zip_file, "r") as zip_ref:
             members = list(
-                fpath for fpath in set(zip_ref.namelist()) - set(sorted(os.listdir(data_dir)))
-                if any(ext in fpath for ext in ['.tif', '.pkl']))
+                fpath
+                for fpath in set(zip_ref.namelist()) - set(sorted(os.listdir(data_dir)))
+                if any(ext in fpath for ext in [".tif", ".pkl"])
+            )
             if len(members) > 0:
                 zip_ref.extractall(path=data_dir, members=members)
-    elif zip_file.endswith('.7z'):
-        with py7zr.SevenZipFile(zip_file, mode='r') as zip_ref:
+    elif zip_file.endswith(".7z"):
+        with py7zr.SevenZipFile(zip_file, mode="r") as zip_ref:
             members = list(
-                fpath for fpath in set(zip_ref.getnames()) - set(sorted(os.listdir(data_dir)))
-                if any(ext in fpath for ext in ['.tif', '.pkl']))
+                fpath
+                for fpath in set(zip_ref.getnames()) - set(sorted(os.listdir(data_dir)))
+                if any(ext in fpath for ext in [".tif", ".pkl"])
+            )
             if len(members) > 0:
                 zip_ref.extract(targets=members, path=data_dir)
     else:
@@ -97,9 +109,11 @@ def download_unzip(data_url, data_dir, bytesize=0, timeout=(10, 30)):
 
 class ShoreDist(RasterFile):
     # This is self-stored data to easy the deployment process
-    data_url = "http://bigdata5.research.cs.dal.ca/raster-shore.7z"
+    data_url = (
+        "https://github.com/AISViz/AISdb/releases/download/data-v1/raster-shore.7z"
+    )
 
-    def __init__(self, data_dir, tif_filename='distance-from-shore.tif'):
+    def __init__(self, data_dir, tif_filename="distance-from-shore.tif"):
         download_unzip(self.data_url, data_dir, bytesize=39911958)
         img_path = os.path.join(data_dir, tif_filename)
         assert os.path.isfile(img_path)
@@ -128,15 +142,17 @@ class ShoreDist(RasterFile):
         >>>         assert 'km_from_shore' in track['dynamic']
         >>>         print(track['km_from_shore'])
         """
-        assert hasattr(self, 'imgpath')
-        return self.merge_tracks(tracks, new_track_key='km_from_shore')
+        assert hasattr(self, "imgpath")
+        return self.merge_tracks(tracks, new_track_key="km_from_shore")
 
 
 class PortDist(RasterFile):
     # This is self-stored data to ease the deployment process
-    data_url = "http://bigdata5.research.cs.dal.ca/raster-ports.7z"
+    data_url = (
+        "https://github.com/AISViz/AISdb/releases/download/data-v1/raster-ports.7z"
+    )
 
-    def __init__(self, data_dir, tif_filename='distance-from-port-v20201104.tiff'):
+    def __init__(self, data_dir, tif_filename="distance-from-port-v20201104.tiff"):
         download_unzip(self.data_url, data_dir, bytesize=1263005549)
         img_path = os.path.join(data_dir, tif_filename)
         assert os.path.isfile(img_path)
@@ -165,15 +181,19 @@ class PortDist(RasterFile):
         >>>         assert 'km_from_port' in track['dynamic']
         >>>         print(track['km_from_port'])
         """
-        assert hasattr(self, 'imgpath')
-        return self.merge_tracks(tracks, new_track_key='km_from_port')
+        assert hasattr(self, "imgpath")
+        return self.merge_tracks(tracks, new_track_key="km_from_port")
 
 
 class CoastDist(RasterFile):
     # This is self-stored data to ease the deployment process
-    data_url = "http://bigdata5.research.cs.dal.ca/raster-coast.7z"
+    data_url = (
+        "https://github.com/AISViz/AISdb/releases/download/data-v1/raster-coast.7z"
+    )
 
-    def __init__(self, data_dir, tif_filename='GMT_intermediate_coast_distance_01d.tif'):
+    def __init__(
+        self, data_dir, tif_filename="GMT_intermediate_coast_distance_01d.tif"
+    ):
         download_unzip(self.data_url, data_dir, bytesize=58802115)
         img_path = os.path.join(data_dir, tif_filename)
         assert os.path.isfile(img_path)
@@ -202,5 +222,5 @@ class CoastDist(RasterFile):
         >>>         assert 'km_from_coast' in track['dynamic']
         >>>         print(track['km_from_coast'])
         """
-        assert hasattr(self, 'imgpath')
-        return self.merge_tracks(tracks, new_track_key='km_from_coast')
+        assert hasattr(self, "imgpath")
+        return self.merge_tracks(tracks, new_track_key="km_from_coast")
