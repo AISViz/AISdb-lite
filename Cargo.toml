@@ -2,9 +2,6 @@
 name = "aisdb"
 edition = "2021"
 version = "1.8.0-alpha"
-include = [
-    "aisdb/*.py", "aisdb/aisdb_sql", "aisdb/database/*.py", "aisdb/webdata/*.py", "/src", "pyproject.toml",
-]
 
 [lib]
 crate-type = [ "cdylib", "rlib", ]

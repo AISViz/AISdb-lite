@@ -51,7 +51,7 @@ jobs:
           source .venv/bin/activate || exit 1
           python -m pip install --upgrade pip || exit 1
           python -m pip install maturin || exit 1
-          maturin develop || exit 1
+          maturin develop --extras=all,docs || exit 1
 
       - name: Install dependencies for API docs
         run: |

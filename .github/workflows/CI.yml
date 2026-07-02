@@ -71,8 +71,9 @@ jobs:
           python -m pip install --upgrade pytest pytest-dotenv pytest-cov furl hypothesis trustme astor pyopenssl isort pydirectory
 
       - name: Run Tests
+        shell: bash
         run: |
-          . AISdb\Scripts\Activate.ps1
+          source AISdb/Scripts/activate
           pytest ./aisdb/tests/ \
             --ignore=./aisdb/tests/test_001_postgres_global.py \
             --ignore=./aisdb/tests/test_002_decode_global.py \
@@ -86,7 +87,6 @@ jobs:
       - name: Clean Up
         run: |
           Remove-Item -Recurse -Force AISdb
-          docker rm -f aisdb-pg
 
 
   build-and-test-linux:

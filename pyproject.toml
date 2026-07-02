@@ -50,10 +50,12 @@ devel = []
 
 [tool.maturin]
 include = [
-    "pyproject.toml", "aisdb/*.py", "aisdb/aisdb_sql/*.sql", "aisdb/database/*.py", "aisdb/tests/*.py",
-    "aisdb_lib/*",
-    "aisdb/tests/testdata/test_data_20210701.csv", "aisdb/tests/testdata/test_data_20211101.nm4", "aisdb/webdata/*.py",
+    "pyproject.toml", "aisdb/*.py", "aisdb/aisdb_sql/*.sql",
+    "aisdb/database/*.py", "aisdb/webdata/*.py", "aisdb/weather/*",
+    "aisdb/discretize/*.py", "aisdb/ports/*.py",
+    "aisdb_lib/*", "receiver/*",
 ]
+exclude = ["aisdb/tests/**"]
 bindings = "pyo3"
 
 [tool.pytest.ini_options]
