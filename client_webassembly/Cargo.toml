@@ -5,9 +5,9 @@ edition = "2021"
 authors = [ "MERIDIAN // Matt Smith matthew.smith@dal.ca",]
 readme = "../../readme.rst"
 description = "AIS Database and Processing Utils - Web Client WASM functions"
-homepage = "https://aisdb.meridian.cs.dal.ca/"
-documentation = "https://aisdb.meridian.cs.dal.ca/doc/readme.html"
-repository = "https://git-dev.cs.dal.ca/meridian/aisdb"
+homepage = "https://aisviz.cs.dal.ca/"
+documentation = "https://aisviz.gitbook.io/documentation/"
+repository = "https://github.com/AISViz/AISdb-lite"
 license-file = "LICENSE"
 
 [lib]

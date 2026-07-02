@@ -14,7 +14,7 @@ dependencies = [
 ]
 zip-safe = false
 version = "1.8.0-alpha"
-readme = "README"
+readme = "README.md"
 description = "Smart AIS data storage and integration"
 classifiers = [
     "Operating System :: POSIX :: Linux", "Programming Language :: Python :: 3.8", "Programming Language :: Python :: 3.9",
@@ -27,14 +27,14 @@ classifiers = [
 
 [[project.authors]]
 email = "aisviz@dal.ca"
-name = "AISViz Mantainers"
+name = "AISViz Maintainers"
 
 [project.license]
 file = "LICENSE"
 
 [project.urls]
 homepage = "https://aisviz.cs.dal.ca/"
-repository = "https://github.com/AISViz/AISdb"
+repository = "https://github.com/AISViz/AISdb-lite"
 tutorials = "https://aisviz.gitbook.io/tutorials/"
 documentation = "https://aisviz.gitbook.io/documentation/"
 
