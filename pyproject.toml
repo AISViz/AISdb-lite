@@ -37,14 +37,28 @@ tutorials = "https://aisviz.gitbook.io/tutorials/"
 documentation = "https://aisviz.gitbook.io/documentation/"
 
 [project.optional-dependencies]
-# feature extras matching the lazily-loaded modules in aisdb/__init__.py
+# feature extras matching the lazily-loaded modules in aisdb/__init__.py.
+# NOTE: lists are expanded rather than self-referencing "aisdb[...]" because
+# pip resolves a self-reference against PyPI (pulling the unrelated aisdb
+# 1.7.x release) instead of the package being installed.
 scraping = ["selenium", "webdriver-manager", "beautifulsoup4", "requests"]
 weather = ["xarray", "cfgrib", "cdsapi"]
 discretize = ["h3", "matplotlib", "geopandas"]
 rasters = ["pillow", "py7zr", "requests", "tqdm"]
 ports = ["pandas", "requests"]
-all = ["aisdb[scraping,weather,discretize,rasters,ports]"]
-test = ["coverage", "pytest", "pytest-cov", "pytest-dotenv", "aisdb[all]"]
+all = [
+    "selenium", "webdriver-manager", "beautifulsoup4", "requests",
+    "xarray", "cfgrib", "cdsapi",
+    "h3", "matplotlib", "geopandas",
+    "pillow", "py7zr", "tqdm", "pandas",
+]
+test = [
+    "coverage", "pytest", "pytest-cov", "pytest-dotenv",
+    "selenium", "webdriver-manager", "beautifulsoup4", "requests",
+    "xarray", "cfgrib", "cdsapi",
+    "h3", "matplotlib", "geopandas",
+    "pillow", "py7zr", "tqdm", "pandas",
+]
 docs = ["sphinx", "sphinx-rtd-theme"]
 devel = []
 
