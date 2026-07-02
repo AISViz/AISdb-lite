@@ -13,8 +13,8 @@ use nmea_parser::NmeaParser;
 use pyo3::{pyfunction, pymodule, types::PyModule, wrap_pyfunction, PyResult, Python};
 use sysinfo::{RefreshKind, System, SystemExt};
 
-use aisdb_lib::csvreader::{postgres_decodemsgs_ee_csv, sqlite_decodemsgs_ee_csv, postgres_decodemsgs_noaa_csv, sqlite_decodemsgs_noaa_csv};
-use aisdb_lib::decode::{postgres_decode_insert_msgs, sqlite_decode_insert_msgs};
+use aisdb_lib::csvreader::{postgres_decodemsgs_ee_csv, postgres_decodemsgs_noaa_csv};
+use aisdb_lib::decode::postgres_decode_insert_msgs;
 use aisdb_receiver::{start_receiver, ReceiverArgs};
 
 macro_rules! zip {
@@ -47,14 +47,12 @@ pub fn haversine(x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
     p1.haversine_distance(&p2)
 }
 
-/// Parse NMEA-formatted strings, and create databases
-/// from raw AIS transmissions
+/// Parse NMEA-formatted strings, and insert vessel messages into the
+/// global tables of a PostgreSQL database
 ///
 /// args:
-///     dbpath (str)
-///         Output SQLite database path. Set this to an empty string to only use Postgres
 ///     psql_conn_string (str)
-///         Postgres database connection string. Set this to an empty string to only use SQLite
+///         Postgres database connection string
 ///     files (array of str)
 ///         array of .nm4 raw data filepath strings
 ///     source (str)
@@ -66,9 +64,8 @@ pub fn haversine(x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
 ///     None
 ///
 #[pyfunction]
-#[pyo3(text_signature = "(dbpath, psql_conn_string, files, source, verbose)")]
+#[pyo3(text_signature = "(psql_conn_string, files, source, verbose)")]
 pub fn decoder(
-    dbpath: PathBuf,
     psql_conn_string: String,
     files: Vec<PathBuf>,
     source: String,
@@ -78,12 +75,6 @@ pub fn decoder(
     type_preference: String,
     py: Python,
 ) -> Vec<PathBuf> {
-    // tuples containing (dbpath, filepath)
-    let mut path_arr: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for file in &files {
-        path_arr.push((dbpath.clone(), file.to_path_buf()));
-    }
-
     // check average file size for memory allocations and multiply by 2
     let mut bytesize: u64 = 0;
     for file in &files {
@@ -144,8 +135,7 @@ pub fn decoder(
     );
 
     // check file extensions and begin decode
-    let mut parser = NmeaParser::new();
-    for (d, f) in path_arr.iter() {
+    for f in files.iter() {
         let f = f.clone();
         let source = source.clone();
         let psql_conn_string = psql_conn_string.clone();
@@ -195,17 +185,6 @@ pub fn decoder(
                 Some("nm4") | Some("NM4") | Some("nmea") | Some("NMEA") | Some("rx")
                 | Some("txt") | Some("RX") | Some("TXT") => {
                     if !process_file {
-                        if !dbpath.to_str().unwrap().is_empty() {
-                            parser = sqlite_decode_insert_msgs(
-                                d.to_path_buf(),
-                                f.clone(),
-                                &source,
-                                parser,
-                                verbose,
-                            )
-                            .expect("decoding NM4");
-                            update_done_files(&mut completed, &mut errored, Ok(f.clone()));
-                        }
                         if !psql_conn_string.is_empty() {
                             let sender = sender.clone();
                             let future = async move {
@@ -233,14 +212,6 @@ pub fn decoder(
                     }
                 }
                 Some("csv") | Some("CSV") => {
-                    if dbpath != PathBuf::from("") {
-                        if source.to_lowercase().contains("noaa") {
-                            sqlite_decodemsgs_noaa_csv(d.to_path_buf(), f.clone(), &source, verbose).expect("decoding CSV");
-                        } else {
-                            sqlite_decodemsgs_ee_csv(d.to_path_buf(), f.clone(), &source, verbose).expect("decoding CSV");
-                        }
-                        update_done_files(&mut completed, &mut errored, Ok(f.clone()));
-                    }
                     if !psql_conn_string.is_empty() {
                         let sender = sender.clone();
                         let future = async move {
@@ -469,11 +440,9 @@ pub fn binarysearch_vector(mut arr: Vec<f64>, search: Vec<f64>) -> Vec<i32> {
 
 /// Receive raw AIS data from an upstream UDP data source, parse the data into
 /// JSON format, and create a websocket listener to send parsed results downstream.
-/// If dbpath is given, parsed data will be stored in an SQLite database.
+/// If a connection string is given, parsed data will be stored in PostgreSQL.
 ///
 /// args:
-///     sqlite_dbpath (Option<String>)
-///         If given, raw messages will be parsed and stored in an SQLite database at this location
 ///     postgres_connection_string (Option<String>)
 ///         Postgres database connection string
 ///     udp_listen_addr (String)
@@ -499,7 +468,6 @@ pub fn binarysearch_vector(mut arr: Vec<f64>, search: Vec<f64>) -> Vec<i32> {
 ///         If True, raw input will be copied to stdout
 #[pyfunction]
 pub fn receiver(
-    sqlite_dbpath: Option<String>,
     postgres_connection_string: Option<String>,
     tcp_connect_addr: Option<String>,
     tcp_listen_addr: Option<String>,
@@ -514,7 +482,6 @@ pub fn receiver(
     py: Python<'_>,
 ) {
     let threads = start_receiver(ReceiverArgs {
-        sqlite_dbpath: sqlite_dbpath.map(PathBuf::from),
         postgres_connection_string,
         tcp_connect_addr,
         tcp_listen_addr,

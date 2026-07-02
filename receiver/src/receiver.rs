@@ -1,16 +1,12 @@
-use std::ffi::OsStr;
 use std::io::{stdout, BufWriter, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::path::PathBuf;
 use std::process::exit;
 use std::thread::{spawn, Builder, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aisdb_lib::db::{
-    get_db_conn, get_postgresdb_conn, postgres_prepare_tx_dynamic, postgres_prepare_tx_static,
-    sqlite_prepare_tx_dynamic, sqlite_prepare_tx_static,
+    get_postgresdb_conn, postgres_prepare_tx_dynamic, postgres_prepare_tx_static, PGClient,
 };
-use aisdb_lib::db::{PGClient, SqliteConnection};
 use aisdb_lib::decode::VesselData;
 
 // external
@@ -84,7 +80,6 @@ fn epoch_time() -> u64 {
 
 #[derive(Clone, Debug)]
 pub struct ReceiverArgs {
-    pub sqlite_dbpath: Option<PathBuf>,
     pub postgres_connection_string: Option<String>,
     pub tcp_connect_addr: Option<String>,
     pub tcp_listen_addr: Option<String>,
@@ -104,12 +99,7 @@ fn parse_args() -> Result<ReceiverArgs, pico_args::Error> {
         //print!("{}", HELP);
         exit(0);
     }
-    fn parse_path(s: &OsStr) -> Result<PathBuf, &'static str> {
-        Ok(s.into())
-    }
-
     let args = ReceiverArgs {
-        sqlite_dbpath: pargs.opt_value_from_os_str("--path", parse_path)?,
         postgres_connection_string: pargs.opt_value_from_str("--postgres-connect")?,
         tcp_connect_addr: pargs.opt_value_from_str("--tcp-connect-addr")?,
         tcp_listen_addr: pargs.opt_value_from_str("--tcp-listen-addr")?,
@@ -213,17 +203,11 @@ fn split_parse_filter_msgs(
 }
 
 fn serialize_static_buffer(
-    sqlite_dbconn: &mut Option<SqliteConnection>,
     postgres_dbconn: &mut Option<PGClient>,
     static_msgs: Vec<VesselData>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     //#[cfg(debug_assertions)]
     println!("Inserting {} static messages ...", static_msgs.len());
-    if let Some(ref mut conn) = sqlite_dbconn {
-        if let Err(e) = sqlite_prepare_tx_static(conn, "rx", static_msgs.to_vec()) {
-            eprintln!("Error inserting vessel static data: {}", e);
-        }
-    }
     if let Some(ref mut conn) = postgres_dbconn {
         if let Err(e) = postgres_prepare_tx_static(conn, "rx", static_msgs) {
             eprintln!("Error inserting vessel static data: {}", e);
@@ -233,16 +217,10 @@ fn serialize_static_buffer(
 }
 
 fn serialize_dynamic_buffer(
-    sqlite_dbconn: &mut Option<SqliteConnection>,
     postgres_dbconn: &mut Option<PGClient>,
     dynamic_msgs: Vec<VesselData>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Inserting {} dynamic messages ...", dynamic_msgs.len());
-    if let Some(ref mut conn) = sqlite_dbconn {
-        if let Err(e) = sqlite_prepare_tx_dynamic(conn, "rx", dynamic_msgs.to_vec()) {
-            eprintln!("Error inserting vessel dynamic data: {}", e);
-        }
-    }
     if let Some(ref mut conn) = postgres_dbconn {
         if let Err(e) = postgres_prepare_tx_dynamic(conn, "rx", dynamic_msgs) {
             eprintln!("Error inserting vessel dynamic data: {}", e);
@@ -254,8 +232,8 @@ fn serialize_dynamic_buffer(
 /// Spawn decoder thread. Accepts input from a UDP socket.
 /// Copies raw input to multicast_addr_rawdata (can be any UDP socket address).
 /// Decodes AIS messages, then filters for static and dynamic message types
-/// Resulting processed data will then optionally be saved to an
-/// SQLite database at dbpath, and sent to outgoing websocket
+/// Resulting processed data will then optionally be saved to the
+/// PostgreSQL database, and sent to outgoing websocket
 /// clients in JSON format.
 fn decode_multicast(args: ReceiverArgs) -> JoinHandle<()> {
     println!(
@@ -291,9 +269,6 @@ fn decode_multicast(args: ReceiverArgs) -> JoinHandle<()> {
     let mut buf = [0u8; BUFSIZE];
     let mut parser = NmeaParser::new();
     let mut output_buffer = BufWriter::new(stdout());
-    let mut sqlite_dbconn = args
-        .sqlite_dbpath
-        .map(|dbp| get_db_conn(dbp).expect("getting sqlite db connection"));
     let mut postgres_dbconn = args
         .postgres_connection_string
         .as_ref()
@@ -320,16 +295,10 @@ fn decode_multicast(args: ReceiverArgs) -> JoinHandle<()> {
                     static_msgs.len()
                 );
                 if dynamic_msgs.len() >= max_dynamic {
-                    serialize_dynamic_buffer(
-                        &mut sqlite_dbconn,
-                        &mut postgres_dbconn,
-                        dynamic_msgs,
-                    )
-                    .unwrap();
+                    serialize_dynamic_buffer(&mut postgres_dbconn, dynamic_msgs).unwrap();
                     dynamic_msgs = vec![];
                 } else if static_msgs.len() >= max_static {
-                    serialize_static_buffer(&mut sqlite_dbconn, &mut postgres_dbconn, static_msgs)
-                        .unwrap();
+                    serialize_static_buffer(&mut postgres_dbconn, static_msgs).unwrap();
                     static_msgs = vec![];
                 }
 
@@ -544,6 +513,7 @@ mod tests {
     use super::*;
     use std::fs::read;
     use std::fs::read_to_string;
+    use std::path::PathBuf;
 
     #[test]
     fn test_receiver() {
@@ -553,7 +523,6 @@ mod tests {
             multicast_addr_parsed: None,
             multicast_addr_rawdata: Some("localhost:9921".to_string()),
             postgres_connection_string: None,
-            sqlite_dbpath: Some(PathBuf::from("./test_receiver.db")),
             static_msg_bufsize: Some(1),
             tcp_connect_addr: None,
             tcp_listen_addr: None,
@@ -619,8 +588,6 @@ mod tests {
             //thread.join().unwrap();
             assert!(!thread.is_finished());
         }
-
-        std::fs::remove_file("./test_receiver.db").unwrap();
 
         let original_input = read(testfile).unwrap();
         assert_eq!(original_input, buf);

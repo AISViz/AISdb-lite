@@ -227,7 +227,6 @@ def process_raw_files(
             dbconn.commit()
 
         completed_files = decoder(
-            dbpath="",
             psql_conn_string=dbconn.connection_string,
             files=raw_files,
             source=source,
@@ -284,15 +283,16 @@ def process_raw_files(
 
     if not raw_insertion and vacuum:
         print("finished parsing data\nvacuuming...")
-        if isinstance(dbconn, SQLiteDBConn):
-            if vacuum is True:
-                dbconn.execute("VACUUM")
-            elif isinstance(vacuum, str):
-                assert not os.path.isfile(vacuum)
-                dbconn.execute("VACUUM INTO ?", (vacuum,))
-            else:
-                raise ValueError("vacuum arg must be boolean or filepath string")
-            dbconn.commit()
+        if vacuum is not True:
+            raise ValueError("vacuum arg must be a boolean for PostgreSQL")
+        # VACUUM cannot run inside a transaction block
+        dbconn.commit()
+        previous_autocommit = dbconn.conn.autocommit
+        dbconn.conn.autocommit = True
+        try:
+            dbconn.conn.execute("VACUUM")
+        finally:
+            dbconn.conn.autocommit = previous_autocommit
 
     return completed_files
 

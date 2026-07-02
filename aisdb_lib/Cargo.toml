@@ -13,11 +13,6 @@ tutorials = "https://aisviz.gitbook.io/tutorials/"
 documentation = "https://aisviz.gitbook.io/documentation/"
 license-file = "LICENSE"
 
-[features]
-default = [ "sqlite", "postgres",]
-sqlite = [ "dep:rusqlite",]
-postgres = [ "dep:postgres",]
-
 [lib]
 
 [dependencies]
@@ -31,7 +26,6 @@ tempfile = "3.8"
 
 [dependencies.postgres]
 version = "0.19"
-optional = true
 
 [dependencies.chrono]
 version = "0.4.21"
@@ -41,11 +35,6 @@ version = "1.1"
 
 [dependencies.nmea-parser]
 version = "0.10"
-
-[dependencies.rusqlite]
-version = "0.29"
-features = [ "bundled",]
-optional = true
 
 [profile.release]
 lto = true

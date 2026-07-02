@@ -48,7 +48,6 @@ def decode_csv_files(
     # Call existing Rust decoder
     # decoder() already identifies CSV and calls postgres_decodemsgs_ee_csv
     processed = decoder(
-        dbpath="",  # Empty string = use Postgres only
         psql_conn_string=dbconn.connection_string,
         files=raw_files,
         source=source,

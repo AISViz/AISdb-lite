@@ -15,7 +15,7 @@ def start_receiver(postgres_connection_string=None,
     '''
         Receive raw AIS data from an upstream UDP data source, parse the data into
         JSON format, and create a websocket listener to send parsed results downstream.
-        If dbpath is given, parsed data will be stored in an SQLite database.
+        If a connection string is given, parsed data will be stored in PostgreSQL.
 
 
         args:
