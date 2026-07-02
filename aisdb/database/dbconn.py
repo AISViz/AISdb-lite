@@ -332,7 +332,7 @@ class PostgresDBConn(_DBConn, psycopg.Connection):
             dbconn.execute('''
                 DELETE FROM ais_global_dynamic WHERE ctid IN (
                     SELECT ctid FROM (
-                        SELECT *, row_number() OVER (PARTITION BY mmsi, time, source ORDER BY ctid)
+                        SELECT *, row_number() OVER (PARTITION BY mmsi, time, latitude, longitude ORDER BY ctid)
                         FROM ais_global_dynamic
                     ) AS duplicates
                     WHERE row_number > 1
@@ -346,7 +346,7 @@ class PostgresDBConn(_DBConn, psycopg.Connection):
         dbconn.execute(f'''
             DELETE FROM ais_{month}_dynamic WHERE ctid IN (
                 SELECT ctid FROM (
-                    SELECT *, row_number() OVER (PARTITION BY mmsi, time, source ORDER BY ctid)
+                    SELECT *, row_number() OVER (PARTITION BY mmsi, time, longitude, latitude ORDER BY ctid)
                     FROM ais_{month}_dynamic
                 ) AS duplicates_{month}
                 WHERE row_number > 1
@@ -433,7 +433,9 @@ class PostgresDBConn(_DBConn, psycopg.Connection):
         skip_nommsi = np.array(agg_rows, dtype=object)
         assert len(skip_nommsi.shape) == 2
         skip_nommsi = skip_nommsi[skip_nommsi[:, 0] != None]
-        assert len(skip_nommsi) > 1
+        if len(skip_nommsi) == 0:
+            warnings.warn('no valid MMSIs to aggregate! table: static_global_aggregate')
+            return
         insert_vals = ','.join(['%s' for _ in range(skip_nommsi.shape[1])])
         insert_stmt = psycopg.sql.SQL(
             f'INSERT INTO static_global_aggregate '
