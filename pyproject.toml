@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 [[project.authors]]
-email = "aisviz@dal.ca"
+email = "mapslab@dal.ca"
 name = "AISViz Maintainers"
 
 [project.license]
@@ -32,7 +32,7 @@ file = "LICENSE"
 
 [project.urls]
 homepage = "https://aisviz.cs.dal.ca/"
-repository = "https://github.com/AISViz/AISdb-lite"
+repository = "https://github.com/MAPS-Lab/AISdb-lite"
 tutorials = "https://aisviz.gitbook.io/tutorials/"
 documentation = "https://aisviz.gitbook.io/documentation/"
 

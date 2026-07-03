@@ -1,6 +1,6 @@
 # AISdb-lite
 
-A lightweight version of [AISdb](https://github.com/AISViz/AISdb) featuring advanced spatio-temporal capabilities with PostGIS and TimescaleDB (TigerData). Where the full AISdb shards AIS messages into per-month tables, AISdb-lite ingests everything into two global tables backed by TimescaleDB hypertables with PostGIS geometry.
+A lightweight version of [AISdb](https://github.com/MAPS-Lab/AISdb) featuring advanced spatio-temporal capabilities with PostGIS and TimescaleDB (TigerData). Where the full AISdb shards AIS messages into per-month tables, AISdb-lite ingests everything into two global tables backed by TimescaleDB hypertables with PostGIS geometry.
 
 ## What it does
 
@@ -90,9 +90,9 @@ Continuous integration builds wheels for Linux, macOS, and Windows and runs the 
 
 ## Related projects
 
-- [AISdb](https://github.com/AISViz/AISdb) is the canonical general-purpose package on [PyPI](https://pypi.org/project/aisdb/); this repository tracks the `vishvesh/dev` lineage of AISViz/AISdb
-- [NOAA-Integrator](https://github.com/AISViz/NOAA-Integrator) acquires AIS data from NOAA Marine Cadastre and loads it into AISdb-aligned databases
-- [Tutorials](https://github.com/AISViz/Tutorials) collects notebooks with worked examples for AISdb workflows
+- [AISdb](https://github.com/MAPS-Lab/AISdb) is the canonical general-purpose package on [PyPI](https://pypi.org/project/aisdb/); this repository tracks the `vishvesh/dev` lineage of AISViz/AISdb
+- [NOAA-Integrator](https://github.com/MAPS-Lab/AISdb-NOAA-Integrator) acquires AIS data from NOAA Marine Cadastre and loads it into AISdb-aligned databases
+- [Tutorials](https://github.com/MAPS-Lab/AISdb-Tutorials) collects notebooks with worked examples for AISdb workflows
 
 ## License
 

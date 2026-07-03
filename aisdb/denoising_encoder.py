@@ -235,7 +235,7 @@ def remove_pings_wrt_speed(tracks, speed_threshold):
 
 
 class InlandDenoising:
-    data_url = "https://github.com/AISViz/AISdb/releases/download/data-v1/geo_land_water_NorthAmerica.7z"
+    data_url = "https://github.com/MAPS-Lab/AISdb/releases/download/data-v1/geo_land_water_NorthAmerica.7z"
 
     def __init__(self, data_dir, land_cache="land.pkl", water_cache="water.pkl"):
         # deferred import: pulls the raster-download stack (requests/py7zr)

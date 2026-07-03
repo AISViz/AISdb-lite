@@ -110,7 +110,7 @@ def download_unzip(data_url, data_dir, bytesize=0, timeout=(10, 30)):
 class ShoreDist(RasterFile):
     # This is self-stored data to easy the deployment process
     data_url = (
-        "https://github.com/AISViz/AISdb/releases/download/data-v1/raster-shore.7z"
+        "https://github.com/MAPS-Lab/AISdb/releases/download/data-v1/raster-shore.7z"
     )
 
     def __init__(self, data_dir, tif_filename="distance-from-shore.tif"):
@@ -149,7 +149,7 @@ class ShoreDist(RasterFile):
 class PortDist(RasterFile):
     # This is self-stored data to ease the deployment process
     data_url = (
-        "https://github.com/AISViz/AISdb/releases/download/data-v1/raster-ports.7z"
+        "https://github.com/MAPS-Lab/AISdb/releases/download/data-v1/raster-ports.7z"
     )
 
     def __init__(self, data_dir, tif_filename="distance-from-port-v20201104.tiff"):
@@ -188,7 +188,7 @@ class PortDist(RasterFile):
 class CoastDist(RasterFile):
     # This is self-stored data to ease the deployment process
     data_url = (
-        "https://github.com/AISViz/AISdb/releases/download/data-v1/raster-coast.7z"
+        "https://github.com/MAPS-Lab/AISdb/releases/download/data-v1/raster-coast.7z"
     )
 
     def __init__(
