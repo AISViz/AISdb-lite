@@ -18,7 +18,7 @@ AIS data comprises digital messages that ships and shore stations broadcast to r
 
 The build requires the following.
 
-- Python 3.10 or newer
+- Python 3.8 or newer
 - Rust toolchain via rustup
 - PostgreSQL with the TimescaleDB and PostGIS extensions
 
@@ -93,7 +93,7 @@ Continuous integration builds wheels for Linux, macOS, and Windows and runs the 
 
 ## Documentation
 
-[docs](https://aisviz.gitbook.io/documentation/) · [tutorials](https://aisviz.gitbook.io/tutorials/) · [API reference](https://aisviz.cs.dal.ca/AISdb/) · [website](https://aisviz.cs.dal.ca/)
+[docs](https://aisviz.gitbook.io/documentation/) · [tutorials](https://aisviz.gitbook.io/tutorials/) · [API reference](https://maps-lab.github.io/AISdb-lite/) · [website](https://aisviz.cs.dal.ca/)
 
 ## Related projects
 

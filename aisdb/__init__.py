@@ -66,6 +66,7 @@ _LAZY_ATTRIBUTES = {
     "ShoreDist": "aisdb.webdata.shore_dist",
     "PortDist": "aisdb.webdata.shore_dist",
     "CoastDist": "aisdb.webdata.shore_dist",
+    "InlandDenoising": "aisdb.denoising_encoder",
     "graph": "aisdb.network_graph",
     "WeatherDataStore": "aisdb.weather.data_store",
     "Discretizer": "aisdb.discretize.h3",

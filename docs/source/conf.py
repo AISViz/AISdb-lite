@@ -10,15 +10,21 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
+import importlib.metadata
 from datetime import datetime
 
-# import aisdb
+try:
+    _version = importlib.metadata.version("aisdb")
+except importlib.metadata.PackageNotFoundError:
+    _version = "0.0.0+unknown"
 
 # -- Project information -----------------------------------------------------
 
 project = "AISDB"
 copyright = f"{datetime.today().year}, MAPS Lab"
-author = "AISViz"
+author = "MAPS Lab"
+version = ".".join(_version.split(".")[:2])
+release = _version
 
 # -- General configuration ---------------------------------------------------
 
@@ -59,14 +65,3 @@ html_theme_options = {}
 html_css_files = [
     #'custom.css',
 ]
-"""
-def skip(app, what, name, obj, would_skip, options):
-    if "fromFunction" in name:
-        return True
-    else:
-        return would_skip
-
-
-def setup(app):
-    app.connect("autodoc-skip-member", skip)
-"""
